@@ -57,7 +57,8 @@ GAME = {
     "crash": 0,
     "bets": {},
     "online": random.randint(10, 40),
-    "history": []
+    "history": [],
+    "timer": 5
 }
 
 async def game_loop():
@@ -65,13 +66,17 @@ async def game_loop():
         GAME["state"] = "waiting"
         GAME["bets"] = {}
         GAME["x"] = 1.0
-        await asyncio.sleep(5)
+
+        for i in range(5, 0, -1):
+            GAME["timer"] = i
+            await asyncio.sleep(1)
 
         GAME["state"] = "flying"
+        GAME["timer"] = 0
         GAME["crash"] = round(random.uniform(1.3, 7), 2)
 
         while GAME["x"] < GAME["crash"]:
-            GAME["x"] = round(GAME["x"] + 0.02, 2)  # 1.02 1.04 1.06
+            GAME["x"] = round(GAME["x"] + 0.02, 2)
             await asyncio.sleep(0.12)
 
         GAME["state"] = "crashed"
@@ -100,7 +105,7 @@ def state():
 async def bet(d: dict):
     uid, amt = int(d["uid"]), float(d["amount"])
     if GAME["state"] != "waiting": return {"error": 1}
-    if uid in GAME["bets"]: return {"error": 3}  # ❌ повторная ставка
+    if uid in GAME["bets"]: return {"error": 3}
     if balance(uid) < amt: return {"error": 2}
     set_balance(uid, balance(uid) - amt)
     GAME["bets"][uid] = amt
@@ -133,6 +138,7 @@ body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
 #app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
 #rocket{font-size:90px;transition:transform .12s}
 #x{font-size:60px;margin:10px}
+#timer{font-size:26px;opacity:.7}
 input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:none;margin:6px}
 #bet{background:#1c1f2a;color:#fff}
 #bet:disabled{opacity:.4}
@@ -140,11 +146,10 @@ input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:non
  background:#ff8c1a;
  color:#000;
  display:none;
- box-shadow:0 0 10px rgba(255,140,26,.4);
- transition:.15s;
+ box-shadow:0 0 12px rgba(255,140,26,.6);
 }
 #cash.glow{
- box-shadow:0 0 25px rgba(255,140,26,.9);
+ box-shadow:0 0 30px rgba(255,140,26,1);
  transform:scale(1.05);
 }
 #hist span{margin:0 4px;opacity:.7}
@@ -154,10 +159,11 @@ input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:non
 <div id="app">
 <div>💰 Баланс: <span id="bal">0</span>$</div>
 <div>👥 Online: <span id="on"></span></div>
+<div id="timer"></div>
 <div id="rocket">🚀</div>
 <div id="x">1.00x</div>
 
-<input id="amt" type="number" value="10">
+<input id="amt" type="number" value="10" inputmode="decimal">
 <button id="bet">СДЕЛАТЬ СТАВКУ</button>
 <button id="cash"></button>
 
@@ -168,15 +174,19 @@ input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:non
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
 let lastX = 1;
+let lastBal = 0;
+
+amt.addEventListener("keydown", e=>{
+ if(e.key==="Enter") amt.blur();
+});
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
+
  x.innerText = s.x.toFixed(2)+"x";
  on.innerText = s.online;
+ timer.innerText = s.state==="waiting" ? "Старт через: "+s.timer+"с" : "";
  hist.innerHTML = s.history.map(h=>"<span>"+h+"x</span>").join("");
-
- let b = await fetch("/balance/"+uid).then(r=>r.json());
- bal.innerText = b.balance.toFixed(2);
 
  if(s.state==="flying"){
   rocket.style.transform="translateY(-"+(s.x*8)+"px)";
@@ -184,12 +194,9 @@ async function tick(){
 
   if(s.bets && s.bets[uid]){
     cash.style.display="block";
-    cash.innerText = "ВЫВЕСТИ " + (s.bets[uid] * s.x).toFixed(2) + "$";
-
-    if(s.x > lastX){
-      cash.classList.add("glow");
-      setTimeout(()=>cash.classList.remove("glow"),80);
-    }
+    cash.innerText = "ВЫВЕСТИ "+(s.bets[uid]*s.x).toFixed(2)+"$";
+    if(s.x>lastX) cash.classList.add("glow");
+    setTimeout(()=>cash.classList.remove("glow"),80);
   }
  }
 
@@ -202,22 +209,31 @@ async function tick(){
 
  if(s.state==="crashed"){
   rocket.innerText="💥";
+  navigator.vibrate?.(200);
   setTimeout(()=>rocket.innerText="🚀",1000);
  }
 
- lastX = s.x;
+ lastX=s.x;
+
+ // баланс реже → меньше лагов
+ let b = await fetch("/balance/"+uid).then(r=>r.json());
+ if(b.balance!==lastBal){
+  bal.innerText=b.balance.toFixed(2);
+  lastBal=b.balance;
+ }
 }
 
-setInterval(tick,120);
+setInterval(tick,150);
 
-bet.onclick = async ()=>{
- let a = parseFloat(amt.value);
+bet.onclick=async ()=>{
+ let a=parseFloat(amt.value);
+ amt.blur();
  bet.disabled=true;
  await fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
  body:JSON.stringify({uid:uid,amount:a})});
 };
 
-cash.onclick = async ()=>{
+cash.onclick=async ()=>{
  await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
  body:JSON.stringify({uid:uid})});
  cash.style.display="none";
