@@ -1,6 +1,6 @@
 import os, asyncio, random, sqlite3
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
@@ -26,7 +26,7 @@ def balance(uid):
     return r[0]
 
 def set_balance(uid, val):
-    cur.execute("UPDATE users SET balance=?", (val, uid))
+    cur.execute("UPDATE users SET balance=? WHERE id=?", (val, uid))
     db.commit()
 
 # ---------- BOT ----------
@@ -49,17 +49,6 @@ async def give(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 bot.add_handler(CommandHandler("start", start))
 bot.add_handler(CommandHandler("give", give))
-
-@app.on_event("startup")
-async def startup():
-    await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
-    asyncio.create_task(game_loop())
-
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    await bot.process_update(Update.de_json(data, bot.bot))
-    return {"ok": True}
 
 # ---------- GAME ----------
 GAME = {
@@ -87,6 +76,24 @@ async def game_loop():
         GAME["state"] = "crashed"
         await asyncio.sleep(5)
 
+# ---------- FASTAPI ----------
+@app.on_event("startup")
+async def startup():
+    await bot.initialize()  # 🔥 ВАЖНО
+    await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
+    asyncio.create_task(game_loop())
+
+@app.on_event("shutdown")
+async def shutdown():
+    await bot.shutdown()
+
+@app.post("/webhook")
+async def webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, bot.bot)
+    await bot.process_update(update)
+    return {"ok": True}
+
 @app.get("/state")
 def state():
     return GAME
@@ -94,8 +101,10 @@ def state():
 @app.post("/bet")
 async def bet(d: dict):
     uid, amt = int(d["uid"]), float(d["amount"])
-    if GAME["state"] != "waiting": return {"error": 1}
-    if balance(uid) < amt: return {"error": 2}
+    if GAME["state"] != "waiting":
+        return {"error": 1}
+    if balance(uid) < amt:
+        return {"error": 2}
     set_balance(uid, balance(uid) - amt)
     GAME["bets"][uid] = amt
     return {"ok": True}
@@ -116,8 +125,7 @@ def bal(uid: int):
 # ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
-<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -149,8 +157,8 @@ let last = "waiting";
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
- document.getElementById("x").innerText = s.x.toFixed(2)+"x";
- document.getElementById("on").innerText = s.online;
+ x.innerText = s.x.toFixed(2)+"x";
+ on.innerText = s.online;
 
  if(s.state==="flying"){
   rocket.style.transform="translateY(-"+(s.x*10)+"px)";
@@ -178,5 +186,4 @@ cash.onclick=()=>fetch("/cashout",{method:"POST",headers:{'Content-Type':'applic
 body:JSON.stringify({uid:uid})});
 </script>
 </body>
-</html>
-"""
+</html>"""
