@@ -63,6 +63,7 @@ GAME = {
 
 async def game_loop():
     while True:
+        # WAITING
         GAME["state"] = "waiting"
         GAME["bets"] = {}
         GAME["x"] = 1.0
@@ -71,6 +72,7 @@ async def game_loop():
             GAME["timer"] = i
             await asyncio.sleep(1)
 
+        # FLYING
         GAME["state"] = "flying"
         GAME["timer"] = 0
         GAME["crash"] = round(random.uniform(1.3, 7), 2)
@@ -79,10 +81,12 @@ async def game_loop():
             GAME["x"] = round(GAME["x"] + 0.02, 2)
             await asyncio.sleep(0.12)
 
+        # CRASH (мгновенно → новый раунд)
         GAME["state"] = "crashed"
         GAME["history"].insert(0, GAME["crash"])
         GAME["history"] = GAME["history"][:10]
-        await asyncio.sleep(5)
+
+        await asyncio.sleep(0.6)  # коротко, без зависаний
 
 # ---------- FASTAPI ----------
 @app.on_event("startup")
@@ -136,7 +140,7 @@ def index():
 <style>
 body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
 #app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-#rocket{font-size:90px;transition:transform .12s}
+#rocket{font-size:90px;transition:transform .1s linear}
 #x{font-size:60px;margin:10px}
 #timer{font-size:26px;opacity:.7}
 input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:none;margin:6px}
@@ -146,11 +150,6 @@ input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:non
  background:#ff8c1a;
  color:#000;
  display:none;
- box-shadow:0 0 12px rgba(255,140,26,.6);
-}
-#cash.glow{
- box-shadow:0 0 30px rgba(255,140,26,1);
- transform:scale(1.05);
 }
 #hist span{margin:0 4px;opacity:.7}
 </style>
@@ -173,57 +172,49 @@ input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:non
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-let lastX = 1;
-let lastBal = 0;
+let lastState="";
 
-amt.addEventListener("keydown", e=>{
+amt.addEventListener("keydown",e=>{
  if(e.key==="Enter") amt.blur();
 });
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
 
- x.innerText = s.x.toFixed(2)+"x";
- on.innerText = s.online;
- timer.innerText = s.state==="waiting" ? "Старт через: "+s.timer+"с" : "";
- hist.innerHTML = s.history.map(h=>"<span>"+h+"x</span>").join("");
+ x.innerText=s.x.toFixed(2)+"x";
+ on.innerText=s.online;
+ timer.innerText=s.state==="waiting" ? "Старт через: "+s.timer+"с" : "";
+ hist.innerHTML=s.history.map(h=>"<span>"+h+"x</span>").join("");
 
  if(s.state==="flying"){
-  rocket.style.transform="translateY(-"+(s.x*8)+"px)";
+  rocket.style.transform="translateY(-"+(s.x*7)+"px)";
   bet.style.display="none";
 
   if(s.bets && s.bets[uid]){
     cash.style.display="block";
-    cash.innerText = "ВЫВЕСТИ "+(s.bets[uid]*s.x).toFixed(2)+"$";
-    if(s.x>lastX) cash.classList.add("glow");
-    setTimeout(()=>cash.classList.remove("glow"),80);
+    cash.innerText="ВЫВЕСТИ "+(s.bets[uid]*s.x).toFixed(2)+"$";
   }
  }
 
  if(s.state==="waiting"){
   rocket.style.transform="translateY(0)";
+  rocket.innerText="🚀";
   bet.style.display="block";
   bet.disabled=false;
   cash.style.display="none";
  }
 
- if(s.state==="crashed"){
+ if(s.state==="crashed" && lastState!=="crashed"){
   rocket.innerText="💥";
-  navigator.vibrate?.(200);
-  setTimeout(()=>rocket.innerText="🚀",1000);
  }
 
- lastX=s.x;
+ lastState=s.state;
 
- // баланс реже → меньше лагов
  let b = await fetch("/balance/"+uid).then(r=>r.json());
- if(b.balance!==lastBal){
-  bal.innerText=b.balance.toFixed(2);
-  lastBal=b.balance;
- }
+ bal.innerText=b.balance.toFixed(2);
 }
 
-setInterval(tick,150);
+setInterval(tick,120);
 
 bet.onclick=async ()=>{
  let a=parseFloat(amt.value);
