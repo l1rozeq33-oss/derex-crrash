@@ -63,7 +63,6 @@ GAME = {
 
 async def game_loop():
     while True:
-        # WAITING
         GAME["state"] = "waiting"
         GAME["bets"] = {}
         GAME["x"] = 1.0
@@ -72,7 +71,6 @@ async def game_loop():
             GAME["timer"] = i
             await asyncio.sleep(1)
 
-        # FLYING
         GAME["state"] = "flying"
         GAME["timer"] = 0
         GAME["crash"] = round(random.uniform(1.3, 7), 2)
@@ -81,12 +79,11 @@ async def game_loop():
             GAME["x"] = round(GAME["x"] + 0.02, 2)
             await asyncio.sleep(0.12)
 
-        # CRASH (мгновенно → новый раунд)
         GAME["state"] = "crashed"
         GAME["history"].insert(0, GAME["crash"])
         GAME["history"] = GAME["history"][:10]
 
-        await asyncio.sleep(0.6)  # коротко, без зависаний
+        await asyncio.sleep(0.6)
 
 # ---------- FASTAPI ----------
 @app.on_event("startup")
@@ -128,7 +125,7 @@ async def cashout(d: dict):
 def bal(uid: int):
     return {"balance": balance(uid)}
 
-# ---------- MINI APP ----------
+# ---------- MINI APP (НОВЫЙ ВИЗУАЛ) ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     return """
@@ -137,36 +134,152 @@ def index():
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+
 <style>
-body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
-#app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-#rocket{font-size:90px;transition:transform .1s linear}
-#x{font-size:60px;margin:10px}
-#timer{font-size:26px;opacity:.7}
-input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:none;margin:6px}
-#bet{background:#1c1f2a;color:#fff}
-#bet:disabled{opacity:.4}
+body{
+ margin:0;
+ background:radial-gradient(circle at top,#111827,#05070c);
+ color:#fff;
+ font-family:-apple-system,BlinkMacSystemFont,Arial;
+}
+
+#app{
+ height:100vh;
+ display:flex;
+ flex-direction:column;
+ justify-content:space-between;
+ padding:16px;
+ box-sizing:border-box;
+}
+
+.top{
+ display:flex;
+ justify-content:space-between;
+ align-items:center;
+ opacity:.9;
+}
+
+.badge{
+ background:#111827;
+ padding:6px 12px;
+ border-radius:20px;
+ font-size:14px;
+}
+
+.center{
+ flex:1;
+ display:flex;
+ flex-direction:column;
+ justify-content:center;
+ align-items:center;
+}
+
+#rocket{
+ font-size:110px;
+ transition:transform .12s linear;
+}
+
+#x{
+ font-size:54px;
+ font-weight:700;
+ margin-top:6px;
+}
+
+#timer{
+ opacity:.7;
+ margin-bottom:6px;
+}
+
+.controls{
+ margin-bottom:90px;
+}
+
+input{
+ width:100%;
+ padding:14px;
+ font-size:18px;
+ border-radius:14px;
+ border:none;
+ background:#111827;
+ color:#fff;
+ margin-bottom:10px;
+}
+
+button{
+ width:100%;
+ padding:18px;
+ font-size:20px;
+ font-weight:700;
+ border-radius:16px;
+ border:none;
+}
+
+#bet{
+ background:#2563eb;
+ color:#fff;
+}
+
+#bet:disabled{opacity:.5}
+
 #cash{
- background:#ff8c1a;
+ background:#f59e0b;
  color:#000;
  display:none;
 }
-#hist span{margin:0 4px;opacity:.7}
+
+.bottom{
+ position:fixed;
+ bottom:0;
+ left:0;
+ right:0;
+ background:#0b0e14;
+ display:flex;
+ justify-content:space-around;
+ padding:12px 0;
+ opacity:.9;
+}
+
+.bottom div{
+ font-size:13px;
+ opacity:.6;
+}
+
+#hist{
+ text-align:center;
+ opacity:.6;
+ font-size:14px;
+ margin-top:8px;
+}
 </style>
 </head>
+
 <body>
 <div id="app">
-<div>💰 Баланс: <span id="bal">0</span>$</div>
-<div>👥 Online: <span id="on"></span></div>
-<div id="timer"></div>
-<div id="rocket">🚀</div>
-<div id="x">1.00x</div>
 
-<input id="amt" type="number" value="10" inputmode="decimal">
-<button id="bet">СДЕЛАТЬ СТАВКУ</button>
-<button id="cash"></button>
+<div class="top">
+ <div class="badge">👥 <span id="on"></span></div>
+ <div class="badge">💰 <span id="bal"></span>$</div>
+</div>
 
-<div id="hist"></div>
+<div class="center">
+ <div id="timer"></div>
+ <div id="rocket">🚀</div>
+ <div id="x">1.00x</div>
+ <div id="hist"></div>
+</div>
+
+<div class="controls">
+ <input id="amt" type="number" value="10" inputmode="decimal">
+ <button id="bet">Сделать ставку</button>
+ <button id="cash"></button>
+</div>
+
+<div class="bottom">
+ <div>🏆 Топ</div>
+ <div style="opacity:1">🚀 Краш</div>
+ <div>👤 Профиль</div>
+</div>
+
 </div>
 
 <script>
@@ -180,19 +293,21 @@ amt.addEventListener("keydown",e=>{
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
+ let b = await fetch("/balance/"+uid).then(r=>r.json());
 
- x.innerText=s.x.toFixed(2)+"x";
  on.innerText=s.online;
- timer.innerText=s.state==="waiting" ? "Старт через: "+s.timer+"с" : "";
- hist.innerHTML=s.history.map(h=>"<span>"+h+"x</span>").join("");
+ bal.innerText=b.balance.toFixed(2);
+ x.innerText=s.x.toFixed(2)+"x";
+ hist.innerHTML=s.history.map(h=>h+"x").join(" · ");
+ timer.innerText=s.state==="waiting" ? "Старт через "+s.timer+"с" : "";
 
  if(s.state==="flying"){
-  rocket.style.transform="translateY(-"+(s.x*7)+"px)";
+  rocket.style.transform="translateY(-"+(s.x*6)+"px)";
   bet.style.display="none";
 
   if(s.bets && s.bets[uid]){
     cash.style.display="block";
-    cash.innerText="ВЫВЕСТИ "+(s.bets[uid]*s.x).toFixed(2)+"$";
+    cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
   }
  }
 
@@ -209,9 +324,6 @@ async function tick(){
  }
 
  lastState=s.state;
-
- let b = await fetch("/balance/"+uid).then(r=>r.json());
- bal.innerText=b.balance.toFixed(2);
 }
 
 setInterval(tick,120);
@@ -230,6 +342,7 @@ cash.onclick=async ()=>{
  cash.style.display="none";
 };
 </script>
+
 </body>
 </html>
 """
