@@ -1,264 +1,182 @@
-import os, json, random, asyncio, time
+import os, asyncio, random, sqlite3
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from telegram.ext import Application, CommandHandler, ContextTypes
+from fastapi.responses import HTMLResponse, JSONResponse
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 WEBAPP_URL = os.getenv("WEBAPP_URL")
 
-DATA_FILE = "data.json"
-
-def load():
-    if not os.path.exists(DATA_FILE):
-        return {}
-    return json.load(open(DATA_FILE))
-
-def save():
-    json.dump(users, open(DATA_FILE, "w"))
-
-users = load()
-
 app = FastAPI()
-tg = Application.builder().token(BOT_TOKEN).build()
 
-# ===== GAME STATE =====
-state = {
-    "x": 1.0,
-    "crash": 2.0,
-    "running": False,
-    "history": []
-}
-bets = {}
-online = random.randint(10, 40)
+# ---------- DATABASE ----------
+db = sqlite3.connect("db.sqlite", check_same_thread=False)
+cur = db.cursor()
+cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, balance REAL)")
+db.commit()
 
-# ===== BOT =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = str(update.effective_user.id)
-    if uid not in users:
-        users[uid] = {"balance": 0}
-        save()
+def balance(uid):
+    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
+    r = cur.fetchone()
+    if not r:
+        cur.execute("INSERT INTO users VALUES (?,0)", (uid,))
+        db.commit()
+        return 0
+    return r[0]
 
+def set_balance(uid, val):
+    cur.execute("UPDATE users SET balance=?", (val, uid))
+    db.commit()
+
+# ---------- BOT ----------
+bot = ApplicationBuilder().token(BOT_TOKEN).build()
+
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🚀 Играть в Crash", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
-        f"💰 Баланс: {users[uid]['balance']}$",
+        "🎰 DEREX CASINO\n\nДобро пожаловать в Crash",
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
-async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def give(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    uid, amount = context.args
-    if uid not in users:
-        users[uid] = {"balance": 0}
-    users[uid]["balance"] += float(amount)
-    save()
-    await update.message.reply_text(f"✅ Выдано {amount}$ пользователю {uid}")
+    uid = int(ctx.args[0])
+    amt = float(ctx.args[1])
+    set_balance(uid, balance(uid) + amt)
+    await update.message.reply_text("✅ Баланс выдан")
 
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    uid = context.args[0]
-    bal = users.get(uid, {"balance": 0})["balance"]
-    await update.message.reply_text(f"💰 Баланс {uid}: {bal}$")
+bot.add_handler(CommandHandler("start", start))
+bot.add_handler(CommandHandler("give", give))
 
-tg.add_handler(CommandHandler("start", start))
-tg.add_handler(CommandHandler("give", give))
-tg.add_handler(CommandHandler("balance", balance))
+@app.on_event("startup")
+async def startup():
+    await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
+    asyncio.create_task(game_loop())
 
 @app.post("/webhook")
 async def webhook(req: Request):
-    update = Update.de_json(await req.json(), tg.bot)
-    await tg.process_update(update)
+    data = await req.json()
+    await bot.process_update(Update.de_json(data, bot.bot))
     return {"ok": True}
 
-# ===== MINI APP =====
+# ---------- GAME ----------
+GAME = {
+    "state": "waiting",
+    "x": 1.0,
+    "crash": 0,
+    "bets": {},
+    "online": random.randint(15, 35)
+}
+
+async def game_loop():
+    while True:
+        GAME["state"] = "waiting"
+        GAME["bets"] = {}
+        await asyncio.sleep(5)
+
+        GAME["state"] = "flying"
+        GAME["crash"] = round(random.uniform(1.3, 7), 2)
+        GAME["x"] = 1.0
+
+        while GAME["x"] < GAME["crash"]:
+            GAME["x"] = round(GAME["x"] + 0.02, 2)
+            await asyncio.sleep(0.05)
+
+        GAME["state"] = "crashed"
+        await asyncio.sleep(5)
+
+@app.get("/state")
+def state():
+    return GAME
+
+@app.post("/bet")
+async def bet(d: dict):
+    uid, amt = int(d["uid"]), float(d["amount"])
+    if GAME["state"] != "waiting": return {"error": 1}
+    if balance(uid) < amt: return {"error": 2}
+    set_balance(uid, balance(uid) - amt)
+    GAME["bets"][uid] = amt
+    return {"ok": True}
+
+@app.post("/cashout")
+async def cashout(d: dict):
+    uid = int(d["uid"])
+    if GAME["state"] != "flying" or uid not in GAME["bets"]:
+        return {"error": 1}
+    win = GAME["bets"].pop(uid) * GAME["x"]
+    set_balance(uid, balance(uid) + win)
+    return {"win": round(win, 2)}
+
+@app.get("/balance/{uid}")
+def bal(uid: int):
+    return {"balance": balance(uid)}
+
+# ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
-async def miniapp():
-    return f"""
+def index():
+    return """
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-body {{
-margin:0;
-background:radial-gradient(circle at top,#1b1f33,#090c16);
-color:white;
-font-family:Arial;
-display:flex;
-justify-content:center;
-align-items:center;
-height:100vh;
-}}
-#box {{
-width:360px;
-text-align:center;
-}}
-#top {{
-display:flex;
-justify-content:space-between;
-margin-bottom:10px;
-}}
-#game {{
-height:220px;
-position:relative;
-}}
-#rocket {{
-position:absolute;
-left:50%;
-bottom:20px;
-transform:translateX(-50%);
-font-size:48px;
-transition:transform .12s linear;
-}}
-#x {{
-position:absolute;
-left:50%;
-bottom:90px;
-transform:translateX(-50%);
-font-size:36px;
-font-weight:bold;
-}}
-#crash {{
-display:none;
-color:#ff4d4d;
-font-size:32px;
-font-weight:bold;
-}}
-button,input {{
-width:100%;
-padding:14px;
-border:none;
-border-radius:12px;
-font-size:16px;
-margin-top:8px;
-}}
-#bet {{
-background:#2b2f45;
-color:white;
-}}
-#cash {{
-background:#f39c12;
-color:black;
-display:none;
-}}
+body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
+#app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#rocket{font-size:80px;transition:transform .2s}
+#x{font-size:64px;margin:10px}
+#online{opacity:.7}
+button{width:80%;padding:18px;font-size:20px;border-radius:14px;border:none;margin:8px}
+#bet{background:#1c1f2a;color:#fff}
+#cash{background:#ff8c1a;color:#000;display:none}
 </style>
 </head>
 <body>
-
-<div id="box">
-<div id="top">
-<div>💰 <span id="bal">0$</span></div>
-<div>👥 {online}</div>
-</div>
-
-<div id="game">
-<div id="x">x1.00</div>
-<div id="crash">CRASH</div>
+<div id="app">
+<div id="online">👥 Online: <span id="on"></span></div>
 <div id="rocket">🚀</div>
-</div>
-
-<input id="amount" type="number" value="10" min="1">
-<button id="bet" onclick="bet()">СДЕЛАТЬ СТАВКУ</button>
-<button id="cash" onclick="cash()">CASHOUT</button>
-
-<div style="margin-top:10px">📊 <span id="hist"></span></div>
+<div id="x">1.00x</div>
+<button id="bet">СДЕЛАТЬ СТАВКУ ($10)</button>
+<button id="cash">ВЫВЕСТИ</button>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
-let staked=false;
+const uid = tg.initDataUnsafe.user.id;
+let last = "waiting";
 
-function update(){{
-fetch("/api/state?u="+tg.initDataUnsafe.user.id)
-.then(r=>r.json())
-.then(d=>{{
-bal.innerText=d.b+"$";
-x.innerText="x"+d.x.toFixed(2);
-hist.innerText=d.h.join(" ");
-if(d.running){{
-crash.style.display="none";
-rocket.style.transform="translateX(-50%) translateY("+(-d.x*22)+"px)";
-if(staked) cash.style.display="block";
-}} else {{
-cash.style.display="none";
-rocket.style.transform="translateX(-50%) translateY(-260px)";
-crash.style.display="block";
-staked=false;
-}}
-}});
-}}
-setInterval(update,120);
+async function tick(){
+ let s = await fetch("/state").then(r=>r.json());
+ document.getElementById("x").innerText = s.x.toFixed(2)+"x";
+ document.getElementById("on").innerText = s.online;
 
-function bet(){{
-fetch("/api/bet",{{method:"POST",headers:{{"Content-Type":"application/json"}},
-body:JSON.stringify({{u:tg.initDataUnsafe.user.id,a:amount.value}})}});
-staked=true;
-}}
+ if(s.state==="flying"){
+  rocket.style.transform="translateY(-"+(s.x*10)+"px)";
+  cash.style.display="block";
+  bet.disabled=true;
+ }
+ if(s.state==="waiting"){
+  rocket.style.transform="translateY(0)";
+  cash.style.display="none";
+  bet.disabled=false;
+ }
+ if(s.state==="crashed" && last!=="crashed"){
+  rocket.innerText="💥";
+  setTimeout(()=>rocket.innerText="🚀",1000);
+  cash.style.display="none";
+ }
+ last = s.state;
+}
+setInterval(tick,100);
 
-function cash(){{
-fetch("/api/cash",{{method:"POST",headers:{{"Content-Type":"application/json"}},
-body:JSON.stringify({{u:tg.initDataUnsafe.user.id}})}});
-staked=false;
-}}
+bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
+body:JSON.stringify({uid:uid,amount:10})});
+
+cash.onclick=()=>fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
+body:JSON.stringify({uid:uid})});
 </script>
 </body>
 </html>
 """
-
-# ===== API =====
-@app.get("/api/state")
-async def api_state(u: str):
-    if u not in users:
-        users[u] = {"balance": 0}
-        save()
-    return {
-        "x": state["x"],
-        "running": state["running"],
-        "b": users[u]["balance"],
-        "h": state["history"][-8:]
-    }
-
-@app.post("/api/bet")
-async def api_bet(d: dict):
-    u = str(d["u"])
-    a = float(d["a"])
-    if users[u]["balance"] < a:
-        return {}
-    bets[u] = a
-    users[u]["balance"] -= a
-    save()
-    return {}
-
-@app.post("/api/cash")
-async def api_cash(d: dict):
-    u = str(d["u"])
-    if u not in bets or not state["running"]:
-        return {}
-    win = round(bets.pop(u) * state["x"], 2)
-    users[u]["balance"] += win
-    save()
-    return {}
-
-# ===== GAME LOOP =====
-async def game_loop():
-    while True:
-        state["x"] = 1.0
-        state["crash"] = round(random.uniform(1.4, 6), 2)
-        state["running"] = True
-        while state["x"] < state["crash"]:
-            await asyncio.sleep(0.12)
-            state["x"] += 0.02
-        state["running"] = False
-        state["history"].append(state["crash"])
-        bets.clear()
-        await asyncio.sleep(3)
-
-@app.on_event("startup")
-async def start_all():
-    await tg.initialize()
-    await tg.bot.set_webhook(WEBAPP_URL + "/webhook")
-    asyncio.create_task(game_loop())
