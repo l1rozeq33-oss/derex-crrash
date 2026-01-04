@@ -1,215 +1,173 @@
 import os
-import asyncio
 import random
-import sqlite3
+import time
+import threading
 from fastapi import FastAPI, Request
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes
-)
+from fastapi.responses import HTMLResponse, JSONResponse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# ================== ENV ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("OWNER_ID"))
-DOMAIN = os.getenv("DOMAIN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+WEBAPP_URL = os.getenv("WEBAPP_URL")
 
-MIN_BET = 0.5
-MAX_BET = 20000
-
-# ================== FASTAPI ==================
 app = FastAPI()
 
-# ================== DB ==================
-conn = sqlite3.connect("casino.db", check_same_thread=False)
-cur = conn.cursor()
+# ================== GAME STORAGE ==================
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    balance REAL DEFAULT 0
-)
-""")
-conn.commit()
+balances = {}          # user_id -> balance
+current_round = {
+    "multiplier": 1.0,
+    "crashed": False,
+    "start_time": time.time(),
+    "crash_point": random.uniform(1.5, 6.0)
+}
 
-def get_balance(uid):
-    cur.execute("SELECT balance FROM users WHERE user_id=?", (uid,))
-    row = cur.fetchone()
-    if not row:
-        cur.execute("INSERT INTO users (user_id, balance) VALUES (?, ?)", (uid, 0))
-        conn.commit()
-        return 0
-    return row[0]
+bets = {}              # user_id -> bet_amount
 
-def add_balance(uid, amount):
-    cur.execute("UPDATE users SET balance = balance + ? WHERE user_id=?", (amount, uid))
-    conn.commit()
+# ================== GAME LOOP ==================
 
-def sub_balance(uid, amount):
-    cur.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (amount, uid))
-    conn.commit()
+def game_loop():
+    global current_round
+    while True:
+        current_round = {
+            "multiplier": 1.0,
+            "crashed": False,
+            "start_time": time.time(),
+            "crash_point": random.uniform(1.5, 6.0)
+        }
 
-# ================== FAKE ONLINE ==================
-def fake_online():
-    return random.randint(37, 124)
+        while current_round["multiplier"] < current_round["crash_point"]:
+            time.sleep(0.1)
+            current_round["multiplier"] += 0.02
 
-# ================== UI ==================
-def main_menu(balance):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚀 Играть в Crash", callback_data="crash")],
-        [InlineKeyboardButton(f"💰 Баланс: {balance:.2f}$", callback_data="balance")],
-        [InlineKeyboardButton(f"👥 Онлайн: {fake_online()}", callback_data="noop")],
-        [InlineKeyboardButton("👑 Админка", callback_data="admin")]
-    ])
+        current_round["crashed"] = True
+        bets.clear()
+        time.sleep(3)
 
-def bet_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("0.5$", callback_data="bet_0.5"),
-            InlineKeyboardButton("1$", callback_data="bet_1"),
-            InlineKeyboardButton("5$", callback_data="bet_5")
-        ],
-        [
-            InlineKeyboardButton("10$", callback_data="bet_10"),
-            InlineKeyboardButton("50$", callback_data="bet_50")
-        ],
-        [InlineKeyboardButton("⬅️ Назад", callback_data="back")]
-    ])
+threading.Thread(target=game_loop, daemon=True).start()
 
-def cashout_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💸 КЭШ АУТ", callback_data="cashout")]
-    ])
+# ================== API ==================
 
-# ================== BOT ==================
-application = Application.builder().token(BOT_TOKEN).build()
+@app.get("/state")
+def state():
+    return current_round
 
-# хранение активных игр
-active_games = {}
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-    bal = get_balance(uid)
-    await update.message.reply_text(
-        "🚀 *DerexCrash*\n\n"
-        "Поймай коэффициент до взрыва 💥\n"
-        "Успей нажать *КЭШ АУТ*!",
-        parse_mode="Markdown",
-        reply_markup=main_menu(bal)
-    )
-
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = q.from_user.id
-    bal = get_balance(uid)
-
-    if q.data == "back":
-        await q.edit_message_text("🏠 Главное меню", reply_markup=main_menu(bal))
-
-    elif q.data == "crash":
-        await q.edit_message_text("💸 Выбери сумму ставки", reply_markup=bet_menu())
-
-    elif q.data.startswith("bet_"):
-        bet = float(q.data.split("_")[1])
-
-        if bet < MIN_BET or bet > MAX_BET:
-            await q.answer("❌ Некорректная ставка", show_alert=True)
-            return
-
-        if bet > bal:
-            await q.answer("❌ Недостаточно средств", show_alert=True)
-            return
-
-        sub_balance(uid, bet)
-        await start_crash(q, uid, bet)
-
-    elif q.data == "cashout":
-        game = active_games.get(uid)
-        if not game or game["ended"]:
-            await q.answer("❌ Нельзя кэш-аут", show_alert=True)
-            return
-
-        game["ended"] = True
-        win = game["bet"] * game["multiplier"]
-        add_balance(uid, win)
-
-        await game["message"].edit_text(
-            f"💸 *КЭШ АУТ!*\n"
-            f"Коэффициент: x{game['multiplier']:.2f}\n"
-            f"Выигрыш: {win:.2f}$",
-            parse_mode="Markdown",
-            reply_markup=main_menu(get_balance(uid))
-        )
-
-    elif q.data == "admin":
-        if uid != OWNER_ID:
-            await q.answer("❌ Нет доступа", show_alert=True)
-            return
-        add_balance(uid, 100)
-        await q.edit_message_text("👑 Админ: +100$ начислено")
-
-# ================== CRASH ==================
-async def start_crash(q, uid, bet):
-    crash_point = round(random.uniform(1.6, 3.8), 2)
-    multiplier = 1.0
-
-    msg = await q.edit_message_text(
-        "🚀 Ракета взлетает...\n`x1.00`",
-        parse_mode="Markdown",
-        reply_markup=cashout_menu()
-    )
-
-    active_games[uid] = {
-        "bet": bet,
-        "multiplier": multiplier,
-        "crash": crash_point,
-        "message": msg,
-        "ended": False
-    }
-
-    while multiplier < crash_point:
-        await asyncio.sleep(0.6)
-        game = active_games.get(uid)
-        if not game or game["ended"]:
-            return
-
-        multiplier += random.uniform(0.05, 0.15)
-        game["multiplier"] = multiplier
-
-        await msg.edit_text(
-            f"🚀 Ракета летит...\n`x{multiplier:.2f}`",
-            parse_mode="Markdown",
-            reply_markup=cashout_menu()
-        )
-
-    game = active_games.get(uid)
-    if game and not game["ended"]:
-        game["ended"] = True
-        await msg.edit_text(
-            "💥 *БУМ!* Ракета взорвалась",
-            parse_mode="Markdown",
-            reply_markup=main_menu(get_balance(uid))
-        )
-
-# ================== WEBHOOK ==================
-@app.post("/webhook")
-async def webhook(req: Request):
+@app.post("/bet")
+async def bet(req: Request):
     data = await req.json()
-    await application.process_update(Update.de_json(data, application.bot))
+    uid = int(data["user_id"])
+    amount = int(data["amount"])
+
+    balances.setdefault(uid, 1000)
+
+    if balances[uid] < amount:
+        return {"error": "NO_BALANCE"}
+
+    balances[uid] -= amount
+    bets[uid] = amount
     return {"ok": True}
 
-@app.on_event("startup")
-async def startup():
-    await application.initialize()
-    await application.bot.set_webhook(f"{DOMAIN}/webhook")
-    print("🤖 Bot started with webhook")
+@app.post("/cashout")
+async def cashout(req: Request):
+    data = await req.json()
+    uid = int(data["user_id"])
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(callbacks))
+    if uid not in bets or current_round["crashed"]:
+        return {"error": "FAILED"}
+
+    win = bets[uid] * current_round["multiplier"]
+    balances[uid] += int(win)
+    bets.pop(uid, None)
+
+    return {"win": int(win), "balance": balances[uid]}
+
+@app.get("/balance/{uid}")
+def balance(uid: int):
+    return {"balance": balances.get(uid, 1000)}
+
+# ================== ADMIN ==================
+
+@app.post("/admin/give")
+async def admin_give(req: Request):
+    data = await req.json()
+    if int(data["admin_id"]) != ADMIN_ID:
+        return {"error": "DENIED"}
+
+    uid = int(data["user_id"])
+    amount = int(data["amount"])
+    balances[uid] = balances.get(uid, 1000) + amount
+    return {"ok": True, "balance": balances[uid]}
+
+# ================== MINI APP ==================
+
+@app.get("/", response_class=HTMLResponse)
+def miniapp():
+    return """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Crash</title>
+<style>
+body { background:#0b0f1a;color:white;font-family:Arial;text-align:center }
+#x { font-size:40px;margin:20px }
+button { padding:10px 20px;border-radius:8px;border:none;background:#1f8cff;color:white;font-size:16px }
+</style>
+</head>
+<body>
+
+<h2>CRASH</h2>
+<div id="x">1.00x</div>
+<input id="bet" type="number" value="10"><br><br>
+<button onclick="place()">СТАВКА</button>
+<button onclick="cash()">CASHOUT</button>
+<p id="bal"></p>
+
+<script>
+const tg = window.Telegram.WebApp;
+tg.expand();
+const uid = tg.initDataUnsafe.user.id;
+
+function load() {
+ fetch('/balance/'+uid).then(r=>r.json()).then(d=>{
+  bal.innerText = "Баланс: "+d.balance
+ })
+}
+load();
+
+setInterval(()=>{
+ fetch('/state').then(r=>r.json()).then(d=>{
+  x.innerText = d.multiplier.toFixed(2)+"x"
+ })
+},100);
+
+function place(){
+ fetch('/bet',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({user_id:uid,amount:bet.value})}).then(load)
+}
+
+function cash(){
+ fetch('/cashout',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({user_id:uid})}).then(r=>r.json()).then(d=>{
+  if(d.win) alert("WIN "+d.win)
+  load()
+ })
+}
+</script>
+</body>
+</html>
+"""
+
+# ================== BOT ==================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    kb = [[InlineKeyboardButton("🚀 Играть", web_app=WebAppInfo(url=WEBAPP_URL))]]
+    await update.message.reply_text("Crash", reply_markup=InlineKeyboardMarkup(kb))
+
+def run_bot():
+    appb = ApplicationBuilder().token(BOT_TOKEN).build()
+    appb.add_handler(CommandHandler("start", start))
+    appb.run_polling(close_loop=False)
+
+threading.Thread(target=run_bot, daemon=True).start()
