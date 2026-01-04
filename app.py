@@ -1,3 +1,8 @@
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+
+app = FastAPI()
+
 # --- ВЕСЬ PYTHON КОД БЕЗ ИЗМЕНЕНИЙ ---
 # (он у тебя уже рабочий, я его не трогаю)
 
@@ -208,3 +213,4 @@ cash.onclick = async ()=>{
 </body>
 </html>
 """
+
