@@ -1,101 +1,128 @@
 import os
-import asyncio
-import threading
-
-from fastapi import FastAPI
+import json
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    WebAppInfo
+    WebAppInfo,
 )
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
-    CallbackQueryHandler,
-    MessageHandler,
     ContextTypes,
-    filters
 )
 
-# ================== CONFIG ==================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+# ================== НАСТРОЙКИ ИЗ ENV ==================
+BOT_TOKEN = os.getenv("BOT_TOKEN")          # токен бота
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # твой Telegram ID
+DOMAIN = os.getenv("DOMAIN")                # https://xxxx.onrender.com
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://derex-crrash.onrender.com")
+if not BOT_TOKEN or not DOMAIN:
+    raise RuntimeError("❌ BOT_TOKEN или DOMAIN не заданы в Environment Variables")
+
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = f"{DOMAIN}{WEBHOOK_PATH}"
 
 # ================== FASTAPI ==================
 app = FastAPI()
 
+# ================== TELEGRAM APP ==================
+telegram_app = Application.builder().token(BOT_TOKEN).build()
 
-@app.get("/")
-def root():
-    return {"status": "ok", "service": "DerexCrash"}
-
-
-# ================== TELEGRAM LOGIC ==================
-def main_menu():
-    return InlineKeyboardMarkup([
+# ================== КОМАНДЫ ==================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
         [
             InlineKeyboardButton(
                 "🚀 Играть в Crash",
-                web_app=WebAppInfo(url=WEBAPP_URL)
+                web_app=WebAppInfo(url=DOMAIN),
             )
-        ],
-        [
-            InlineKeyboardButton("👤 Профиль", callback_data="profile")
         ]
-    ])
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    ]
     await update.message.reply_text(
-        "🎰 *DerexCasino*\n\n"
-        "Добро пожаловать!\n"
-        "Нажми кнопку ниже и начни игру 🚀",
-        parse_mode="Markdown",
-        reply_markup=main_menu()
+        "Добро пожаловать в Crash Casino 🎰\n\nНажми кнопку ниже 👇",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
+telegram_app.add_handler(CommandHandler("start", start))
 
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "profile":
-        await query.edit_message_text(
-            "👤 *Профиль*\n\n"
-            "Баланс: 0$\n"
-            "Игр: 0\n"
-            "Побед: 0",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
-
-
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Используй кнопки 👇", reply_markup=main_menu())
-
-
-# ================== BOT START ==================
-async def start_bot():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN not set")
-
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(callbacks))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-
-    print("🤖 Telegram bot started (polling)")
-    await application.run_polling()
-
-
-# ================== RUN BOT ON STARTUP ==================
+# ================== WEBHOOK ==================
 @app.on_event("startup")
-def startup_event():
-    threading.Thread(
-        target=lambda: asyncio.run(start_bot()),
-        daemon=True
-    ).start()
+async def on_startup():
+    await telegram_app.initialize()
+    await telegram_app.bot.set_webhook(WEBHOOK_URL)
+    print("🤖 Webhook установлен:", WEBHOOK_URL)
+
+@app.post(WEBHOOK_PATH)
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.process_update(update)
+    return {"ok": True}
+
+# ================== MINI APP (CRASH UI) ==================
+@app.get("/", response_class=HTMLResponse)
+async def mini_app():
+    return """
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Crash</title>
+<style>
+body {
+    margin: 0;
+    background: #0e0e0e;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+}
+#multiplier {
+    font-size: 48px;
+    margin-top: 40px;
+}
+button {
+    padding: 15px 30px;
+    font-size: 18px;
+    border: none;
+    border-radius: 8px;
+    background: #ff2e63;
+    color: white;
+    cursor: pointer;
+}
+</style>
+</head>
+<body>
+<h2>Crash</h2>
+<div id="multiplier">1.00x</div>
+<br>
+<button onclick="startGame()">СТАВКА</button>
+
+<script>
+let running = false;
+let value = 1.0;
+let timer;
+
+function startGame() {
+    if (running) return;
+    running = true;
+    value = 1.0;
+    document.getElementById("multiplier").innerText = value.toFixed(2) + "x";
+
+    timer = setInterval(() => {
+        value += 0.05;
+        document.getElementById("multiplier").innerText = value.toFixed(2) + "x";
+
+        if (Math.random() < 0.02) {
+            clearInterval(timer);
+            running = false;
+            alert("💥 КРАШ НА " + value.toFixed(2) + "x");
+        }
+    }, 100);
+}
+</script>
+</body>
+</html>
+"""
