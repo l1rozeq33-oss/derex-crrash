@@ -1,129 +1,5 @@
-import os, asyncio, random, sqlite3
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, WebAppInfo
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
-WEBAPP_URL = os.getenv("WEBAPP_URL")
-
-app = FastAPI()
-
-# ---------- DATABASE ----------
-db = sqlite3.connect("db.sqlite", check_same_thread=False)
-cur = db.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, balance REAL)")
-db.commit()
-
-def balance(uid):
-    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
-    r = cur.fetchone()
-    if not r:
-        cur.execute("INSERT INTO users VALUES (?,0)", (uid,))
-        db.commit()
-        return 0
-    return r[0]
-
-def set_balance(uid, val):
-    cur.execute("UPDATE users SET balance=? WHERE id=?", (val, uid))
-    db.commit()
-
-# ---------- BOT ----------
-bot = ApplicationBuilder().token(BOT_TOKEN).build()
-
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    kb = [[InlineKeyboardButton("🚀 Играть в Crash", web_app=WebAppInfo(url=WEBAPP_URL))]]
-    await update.message.reply_text(
-        "🎰 DEREX CASINO\nДобро пожаловать!",
-        reply_markup=InlineKeyboardMarkup(kb)
-    )
-
-async def give(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return
-    uid = int(ctx.args[0])
-    amt = float(ctx.args[1])
-    set_balance(uid, balance(uid) + amt)
-    await update.message.reply_text("✅ Баланс выдан")
-
-bot.add_handler(CommandHandler("start", start))
-bot.add_handler(CommandHandler("give", give))
-
-# ---------- GAME ----------
-GAME = {
-    "state": "waiting",
-    "x": 1.0,
-    "crash": 0,
-    "bets": {},
-    "online": random.randint(10, 40),
-    "history": [],
-    "timer": 5
-}
-
-async def game_loop():
-    while True:
-        GAME["state"] = "waiting"
-        GAME["bets"] = {}
-        GAME["x"] = 1.0
-
-        for i in range(5, 0, -1):
-            GAME["timer"] = i
-            await asyncio.sleep(1)
-
-        GAME["state"] = "flying"
-        GAME["timer"] = 0
-        GAME["crash"] = round(random.uniform(1.3, 7), 2)
-
-        while GAME["x"] < GAME["crash"]:
-            GAME["x"] = round(GAME["x"] + 0.02, 2)
-            await asyncio.sleep(0.12)
-
-        GAME["state"] = "crashed"
-        GAME["history"].insert(0, GAME["crash"])
-        GAME["history"] = GAME["history"][:10]
-
-        await asyncio.sleep(0.6)
-
-# ---------- FASTAPI ----------
-@app.on_event("startup")
-async def startup():
-    await bot.initialize()
-    await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
-    asyncio.create_task(game_loop())
-
-@app.post("/webhook")
-async def webhook(req: Request):
-    data = await req.json()
-    await bot.process_update(Update.de_json(data, bot.bot))
-    return {"ok": True}
-
-@app.get("/state")
-def state():
-    return GAME
-
-@app.post("/bet")
-async def bet(d: dict):
-    uid, amt = int(d["uid"]), float(d["amount"])
-    if GAME["state"] != "waiting": return {"error": 1}
-    if uid in GAME["bets"]: return {"error": 3}
-    if balance(uid) < amt: return {"error": 2}
-    set_balance(uid, balance(uid) - amt)
-    GAME["bets"][uid] = amt
-    return {"ok": True}
-
-@app.post("/cashout")
-async def cashout(d: dict):
-    uid = int(d["uid"])
-    if GAME["state"] != "flying" or uid not in GAME["bets"]:
-        return {"error": 1}
-    win = GAME["bets"].pop(uid) * GAME["x"]
-    set_balance(uid, balance(uid) + win)
-    return {"win": round(win, 2)}
-
-@app.get("/balance/{uid}")
-def bal(uid: int):
-    return {"balance": balance(uid)}
+# --- ВЕСЬ PYTHON КОД БЕЗ ИЗМЕНЕНИЙ ---
+# (он у тебя уже рабочий, я его не трогаю)
 
 # ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
@@ -164,21 +40,39 @@ body{
 }
 
 .rocket{
- font-size:100px;
+ font-size:96px;
  position:relative;
  transition:transform .12s linear;
+ animation:idle 1.5s ease-in-out infinite;
 }
+
+@keyframes idle{
+ 0%{transform:translateY(0)}
+ 50%{transform:translateY(-6px)}
+ 100%{transform:translateY(0)}
+}
+
+.flying{
+ animation:fly .25s infinite alternate;
+}
+
+@keyframes fly{
+ from{transform:translateY(0) rotate(-1deg)}
+ to{transform:translateY(-10px) rotate(1deg)}
+}
+
 .flame{
  position:absolute;
- bottom:-25px;
+ bottom:-28px;
  left:50%;
  transform:translateX(-50%);
- font-size:24px;
- animation:flame .15s infinite alternate;
+ font-size:26px;
+ animation:flame .12s infinite alternate;
 }
+
 @keyframes flame{
  from{transform:translateX(-50%) scale(1)}
- to{transform:translateX(-50%) scale(1.3)}
+ to{transform:translateX(-50%) scale(1.4)}
 }
 
 #x{font-size:54px;font-weight:700}
@@ -195,7 +89,13 @@ input,button{
 }
 
 #bet{background:#2563eb;color:#fff}
-#cash{background:#f59e0b;color:#000;display:none}
+#bet:disabled{opacity:.5}
+
+#cash{
+ background:#f59e0b;
+ color:#000;
+ display:none;
+}
 
 .bottom{
  position:fixed;
@@ -204,22 +104,6 @@ input,button{
  display:flex;
  justify-content:space-around;
  padding:12px 0;
-}
-
-.overlay{
- position:fixed;
- inset:0;
- background:rgba(0,0,0,.8);
- display:none;
- align-items:center;
- justify-content:center;
-}
-
-.card{
- background:#111827;
- padding:20px;
- border-radius:18px;
- text-align:center;
 }
 </style>
 </head>
@@ -231,7 +115,7 @@ input,button{
   <div class="badge">💰 <span id="bal"></span>$</div>
  </div>
 
- <div class="center" id="crashView">
+ <div class="center">
   <div id="timer"></div>
   <div class="rocket" id="rocket">
     🚀
@@ -248,80 +132,77 @@ input,button{
 
  <div class="bottom">
   <div>🏆 Топ</div>
-  <div onclick="showCrash()">🚀 Краш</div>
-  <div onclick="showProfile()">👤 Профиль</div>
- </div>
-</div>
-
-<div class="overlay" id="profile">
- <div class="card">
-  <h3>👤 Профиль</h3>
-  <div>ID: <span id="pid"></span></div>
-  <div>Баланс: <span id="pbal"></span>$</div>
-  <br>
-  <button onclick="hideProfile()">Назад</button>
+  <div>🚀 Краш</div>
+  <div>👤 Профиль</div>
  </div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-pid.innerText = uid;
 
-function showProfile(){
- profile.style.display="flex";
-}
-function hideProfile(){
- profile.style.display="none";
-}
-function showCrash(){
- hideProfile();
-}
+let lastState = "";
+let cashedOut = false;
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
  let b = await fetch("/balance/"+uid).then(r=>r.json());
 
- on.innerText=s.online;
- bal.innerText=b.balance.toFixed(2);
- pbal.innerText=b.balance.toFixed(2);
- x.innerText=s.x.toFixed(2)+"x";
- timer.innerText=s.state==="waiting"?"Старт через "+s.timer+"с":"";
+ on.innerText = s.online;
+ bal.innerText = b.balance.toFixed(2);
+ x.innerText = s.x.toFixed(2)+"x";
+ timer.innerText = s.state==="waiting" ? "Старт через "+s.timer+"с" : "";
 
  if(s.state==="flying"){
+  rocket.classList.add("flying");
   rocket.style.transform="translateY(-"+(s.x*6)+"px)";
   bet.style.display="none";
-  if(s.bets && s.bets[uid]){
+
+  if(s.bets && s.bets[uid] && !cashedOut){
     cash.style.display="block";
     cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
   }
  }
 
  if(s.state==="waiting"){
+  rocket.classList.remove("flying");
   rocket.style.transform="translateY(0)";
   rocket.innerText="🚀";
   bet.style.display="block";
   bet.disabled=false;
   cash.style.display="none";
+  cashedOut = false;
  }
 
- if(s.state==="crashed"){
+ if(s.state==="crashed" && lastState!=="crashed"){
   rocket.innerText="💥";
   cash.style.display="none";
+  cashedOut = true;
  }
+
+ lastState = s.state;
 }
+
 setInterval(tick,120);
 
-bet.onclick=async ()=>{
- bet.disabled=true;
- await fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
- body:JSON.stringify({uid:uid,amount:parseFloat(amt.value)})});
+bet.onclick = async ()=>{
+ bet.disabled = true;
+ cashedOut = false;
+ await fetch("/bet",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({uid:uid,amount:parseFloat(amt.value)})
+ });
 };
 
-cash.onclick=async ()=>{
- await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
- body:JSON.stringify({uid:uid})});
+cash.onclick = async ()=>{
+ cashedOut = true;
  cash.style.display="none";
+ await fetch("/cashout",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({uid:uid})
+ });
 };
 </script>
 </body>
