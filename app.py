@@ -56,7 +56,7 @@ GAME = {
     "x": 1.0,
     "crash": 0,
     "bets": {},
-    "online": random.randint(10, 40),
+    "online": random.randint(15, 35),
     "history": []
 }
 
@@ -67,12 +67,12 @@ async def game_loop():
         await asyncio.sleep(5)
 
         GAME["state"] = "flying"
-        GAME["crash"] = round(random.uniform(1.3, 7), 2)
+        GAME["crash"] = round(random.uniform(1.3, 6.5), 2)
         GAME["x"] = 1.0
 
         while GAME["x"] < GAME["crash"]:
-            GAME["x"] = round(GAME["x"] + 0.2, 2)
-            await asyncio.sleep(0.15)
+            GAME["x"] = round(GAME["x"] + 0.02, 2)
+            await asyncio.sleep(0.12)
 
         GAME["state"] = "crashed"
         GAME["history"].insert(0, GAME["crash"])
@@ -85,10 +85,6 @@ async def startup():
     await bot.initialize()
     await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
     asyncio.create_task(game_loop())
-
-@app.on_event("shutdown")
-async def shutdown():
-    await bot.shutdown()
 
 @app.post("/webhook")
 async def webhook(req: Request):
@@ -127,40 +123,74 @@ def bal(uid: int):
 # ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """<!DOCTYPE html>
+    return """
+<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
-body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
-#app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-#rocket{font-size:90px;transition:transform .15s}
-#x{font-size:60px;margin:10px}
-input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:none;margin:6px}
-#bet{background:#1c1f2a;color:#fff}
+body{
+ margin:0;
+ background:linear-gradient(180deg,#0b0e14,#131826);
+ color:#fff;
+ font-family:Arial;
+}
+#app{
+ height:100vh;
+ display:flex;
+ flex-direction:column;
+ align-items:center;
+ justify-content:space-between;
+ padding:20px;
+}
+.top{width:100%;display:flex;justify-content:space-between;font-size:18px}
+#rocket{font-size:80px;transition:transform .12s}
+#x{font-size:64px;font-weight:bold}
+.panel{
+ width:100%;
+ max-width:420px;
+ background:#151a2a;
+ border-radius:20px;
+ padding:16px;
+}
+input,button{
+ width:100%;
+ padding:18px;
+ font-size:20px;
+ border-radius:16px;
+ border:none;
+ margin-top:10px;
+}
+#bet{background:#1f2438;color:#fff}
+#bet:disabled{opacity:.4}
 #cash{background:#ff8c1a;color:#000;display:none}
+#hist{margin-top:10px;text-align:center}
 #hist span{margin:0 4px;opacity:.7}
 </style>
 </head>
 <body>
 <div id="app">
-<div>💰 Баланс: <span id="bal">0</span>$</div>
-<div>👥 Online: <span id="on"></span></div>
-<div id="rocket">🚀</div>
-<div id="x">1.00x</div>
+ <div class="top">
+  <div>💰 <span id="bal">0</span>$</div>
+  <div>👥 <span id="on"></span></div>
+ </div>
 
-<input id="amt" type="number" value="10">
-<button id="bet">СДЕЛАТЬ СТАВКУ</button>
-<button id="cash"></button>
+ <div id="rocket">🚀</div>
+ <div id="x">1.00x</div>
 
-<div id="hist"></div>
+ <div class="panel">
+  <input id="amt" type="number" value="10" min="1">
+  <button id="bet">СДЕЛАТЬ СТАВКУ</button>
+  <button id="cash"></button>
+  <div id="hist"></div>
+ </div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-let last="";
+let hasBet=false, betAmt=0, last="";
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
@@ -172,33 +202,42 @@ async function tick(){
  bal.innerText=b.balance.toFixed(2);
 
  if(s.state==="flying"){
-  rocket.style.transform="translateY(-"+(s.x*8)+"px)";
-  bet.style.display="none";
-  cash.style.display="block";
-  if(window.betAmt) cash.innerText="ВЫВЕСТИ "+(window.betAmt*s.x).toFixed(2)+"$";
+  rocket.style.transform="translateY(-"+(s.x*6)+"px)";
+  bet.disabled=true;
+  if(hasBet){
+   cash.style.display="block";
+   cash.innerText="ВЫВЕСТИ "+(betAmt*s.x).toFixed(2)+"$";
+  }
  }
  if(s.state==="waiting"){
   rocket.style.transform="translateY(0)";
-  bet.style.display="block";
+  bet.disabled=false;
   cash.style.display="none";
+  hasBet=false;
  }
  if(s.state==="crashed" && last!=="crashed"){
   rocket.innerText="💥";
-  setTimeout(()=>rocket.innerText="🚀",1000);
+  setTimeout(()=>rocket.innerText="🚀",800);
  }
  last=s.state;
 }
-setInterval(tick,120);
+setInterval(tick,150);
 
 bet.onclick=()=>{
  let a=parseFloat(amt.value);
- window.betAmt=a;
+ betAmt=a;
+ hasBet=true;
  fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
  body:JSON.stringify({uid:uid,amount:a})});
 };
 
-cash.onclick=()=>fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
-body:JSON.stringify({uid:uid})});
+cash.onclick=()=>{
+ fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid:uid})});
+ hasBet=false;
+ cash.style.display="none";
+};
 </script>
 </body>
-</html>"""
+</html>
+"""
