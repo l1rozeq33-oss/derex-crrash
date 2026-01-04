@@ -35,7 +35,7 @@ bot = ApplicationBuilder().token(BOT_TOKEN).build()
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🚀 Играть в Crash", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
-        "🎰 DEREX CASINO\n\nДобро пожаловать в Crash",
+        "🎰 DEREX CASINO\nДобро пожаловать!",
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
@@ -56,7 +56,8 @@ GAME = {
     "x": 1.0,
     "crash": 0,
     "bets": {},
-    "online": random.randint(15, 35)
+    "online": random.randint(10, 40),
+    "history": []
 }
 
 async def game_loop():
@@ -70,16 +71,18 @@ async def game_loop():
         GAME["x"] = 1.0
 
         while GAME["x"] < GAME["crash"]:
-            GAME["x"] = round(GAME["x"] + 0.02, 2)
-            await asyncio.sleep(0.05)
+            GAME["x"] = round(GAME["x"] + 0.2, 2)
+            await asyncio.sleep(0.15)
 
         GAME["state"] = "crashed"
+        GAME["history"].insert(0, GAME["crash"])
+        GAME["history"] = GAME["history"][:10]
         await asyncio.sleep(5)
 
 # ---------- FASTAPI ----------
 @app.on_event("startup")
 async def startup():
-    await bot.initialize()  # 🔥 ВАЖНО
+    await bot.initialize()
     await bot.bot.set_webhook(f"{WEBAPP_URL}/webhook")
     asyncio.create_task(game_loop())
 
@@ -90,8 +93,7 @@ async def shutdown():
 @app.post("/webhook")
 async def webhook(req: Request):
     data = await req.json()
-    update = Update.de_json(data, bot.bot)
-    await bot.process_update(update)
+    await bot.process_update(Update.de_json(data, bot.bot))
     return {"ok": True}
 
 @app.get("/state")
@@ -133,54 +135,67 @@ def index():
 <style>
 body{margin:0;background:#0b0e14;color:#fff;font-family:Arial}
 #app{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center}
-#rocket{font-size:80px;transition:transform .2s}
-#x{font-size:64px;margin:10px}
-#online{opacity:.7}
-button{width:80%;padding:18px;font-size:20px;border-radius:14px;border:none;margin:8px}
+#rocket{font-size:90px;transition:transform .15s}
+#x{font-size:60px;margin:10px}
+input,button{width:80%;padding:16px;font-size:20px;border-radius:14px;border:none;margin:6px}
 #bet{background:#1c1f2a;color:#fff}
 #cash{background:#ff8c1a;color:#000;display:none}
+#hist span{margin:0 4px;opacity:.7}
 </style>
 </head>
 <body>
 <div id="app">
-<div id="online">👥 Online: <span id="on"></span></div>
+<div>💰 Баланс: <span id="bal">0</span>$</div>
+<div>👥 Online: <span id="on"></span></div>
 <div id="rocket">🚀</div>
 <div id="x">1.00x</div>
-<button id="bet">СДЕЛАТЬ СТАВКУ ($10)</button>
-<button id="cash">ВЫВЕСТИ</button>
+
+<input id="amt" type="number" value="10">
+<button id="bet">СДЕЛАТЬ СТАВКУ</button>
+<button id="cash"></button>
+
+<div id="hist"></div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-let last = "waiting";
+let last="";
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
- x.innerText = s.x.toFixed(2)+"x";
- on.innerText = s.online;
+ x.innerText=s.x.toFixed(2)+"x";
+ on.innerText=s.online;
+ hist.innerHTML=s.history.map(h=>"<span>"+h+"x</span>").join("");
+
+ let b=await fetch("/balance/"+uid).then(r=>r.json());
+ bal.innerText=b.balance.toFixed(2);
 
  if(s.state==="flying"){
-  rocket.style.transform="translateY(-"+(s.x*10)+"px)";
+  rocket.style.transform="translateY(-"+(s.x*8)+"px)";
+  bet.style.display="none";
   cash.style.display="block";
-  bet.disabled=true;
+  if(window.betAmt) cash.innerText="ВЫВЕСТИ "+(window.betAmt*s.x).toFixed(2)+"$";
  }
  if(s.state==="waiting"){
   rocket.style.transform="translateY(0)";
+  bet.style.display="block";
   cash.style.display="none";
-  bet.disabled=false;
  }
  if(s.state==="crashed" && last!=="crashed"){
   rocket.innerText="💥";
   setTimeout(()=>rocket.innerText="🚀",1000);
-  cash.style.display="none";
  }
- last = s.state;
+ last=s.state;
 }
-setInterval(tick,100);
+setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
-body:JSON.stringify({uid:uid,amount:10})});
+bet.onclick=()=>{
+ let a=parseFloat(amt.value);
+ window.betAmt=a;
+ fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid:uid,amount:a})});
+};
 
 cash.onclick=()=>fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
 body:JSON.stringify({uid:uid})});
