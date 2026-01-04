@@ -216,7 +216,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(
             "🚀 Играть в Crash",
-            web_app=WebAppInfo(url="https://ТВОЙ_ДОМЕН")
+            web_app=WebAppInfo(url="https://derex-crrash.onrender.com")
         )]
     ])
 
@@ -239,3 +239,4 @@ threading.Thread(target=run_bot, daemon=True).start()
 
 # ================== ЗАПУСК ==================
 # uvicorn app:app --host 0.0.0.0 --port 10000
+
