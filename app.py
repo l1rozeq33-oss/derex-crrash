@@ -45,7 +45,7 @@ async def give(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = int(ctx.args[0])
     amt = float(ctx.args[1])
     set_balance(uid, balance(uid) + amt)
-    await update.message.reply_text(f"✅ Выдано {amt}$ пользователю {uid}")
+    await update.message.reply_text(f"✅ Выдано {amt}$")
 
 bot.add_handler(CommandHandler("start", start))
 bot.add_handler(CommandHandler("give", give))
@@ -102,9 +102,12 @@ def state():
 async def bet(d: dict):
     uid, amt = int(d["uid"]), float(d["amount"])
     if GAME["state"] != "waiting":
-        return {"error": 1}
+        return {"error": "round"}
+    if uid in GAME["bets"]:
+        return {"error": "already"}
     if balance(uid) < amt:
-        return {"error": 2}
+        return {"error": "money"}
+
     set_balance(uid, balance(uid) - amt)
     GAME["bets"][uid] = amt
     return {"ok": True}
@@ -112,8 +115,11 @@ async def bet(d: dict):
 @app.post("/cashout")
 async def cashout(d: dict):
     uid = int(d["uid"])
-    if GAME["state"] != "flying" or uid not in GAME["bets"]:
-        return {"error": 1}
+    if GAME["state"] != "flying":
+        return {"error": "no"}
+    if uid not in GAME["bets"]:
+        return {"error": "no_bet"}
+
     win = GAME["bets"].pop(uid) * GAME["x"]
     set_balance(uid, balance(uid) + win)
     return {"win": round(win, 2)}
@@ -144,36 +150,37 @@ body{
  justify-content:center;
 }
 #card{
- width:94%;
- max-width:440px;
+ width:92%;
+ max-width:400px;
  background:linear-gradient(180deg,#151a33,#0b0e18);
- border-radius:28px;
- padding:24px;
- box-shadow:0 0 60px rgba(0,0,0,.7);
+ border-radius:26px;
+ padding:20px;
+ box-shadow:0 0 50px rgba(0,0,0,.7);
  text-align:center;
 }
-#rocket{font-size:120px;transition:transform .12s}
-#x{font-size:84px;font-weight:900;margin:12px}
-#timer{opacity:.7;font-size:20px}
+#rocket{font-size:100px;transition:transform .12s}
+#x{font-size:72px;font-weight:900;margin:10px}
+#timer{opacity:.7;font-size:18px}
 button,input{
  width:100%;
- padding:20px;
- font-size:24px;
- border-radius:20px;
+ padding:18px;
+ font-size:22px;
+ border-radius:18px;
  border:none;
- margin-top:12px;
+ margin-top:10px;
 }
 #bet{background:#202652;color:#fff}
 #cash{background:#ff8c1a;color:#000;font-weight:900;display:none}
-#hist span{margin:0 5px;opacity:.7}
+#hist span{margin:0 4px;opacity:.7}
 </style>
 </head>
 <body>
-<div id="app">
+<div id="app" onclick="closeKb(event)">
 <div id="card">
 <div>💰 Баланс: <b><span id="bal">0</span>$</b></div>
 <div>👥 Online: <span id="on"></span></div>
 <div id="timer"></div>
+
 <div id="rocket">🚀</div>
 <div id="x">1.00x</div>
 
@@ -192,6 +199,12 @@ const uid = tg.initDataUnsafe.user.id;
 let betAmount = 0;
 let lastState = "";
 
+function closeKb(e){
+ if(e.target.tagName!=="INPUT"){
+   document.activeElement.blur();
+ }
+}
+
 async function tick(){
  const s = await fetch("/state").then(r=>r.json());
  x.innerText = s.x.toFixed(2)+"x";
@@ -202,7 +215,7 @@ async function tick(){
  bal.innerText = b.balance.toFixed(2);
 
  if(s.state==="waiting"){
-  timer.innerText = "Старт через " + Math.max(0,Math.ceil(s.start_at-Date.now()/1000))+" сек";
+  timer.innerText="Старт через "+Math.max(0,Math.ceil(s.start_at-Date.now()/1000))+" сек";
   rocket.style.transform="translateY(0)";
   bet.style.display="block";
   bet.disabled=false;
@@ -212,7 +225,7 @@ async function tick(){
 
  if(s.state==="flying"){
   timer.innerText="";
-  rocket.style.transform="translateY(-"+(s.x*9)+"px)";
+  rocket.style.transform="translateY(-"+(s.x*8)+"px)";
   bet.style.display="none";
   if(betAmount>0){
     cash.style.display="block";
@@ -232,11 +245,15 @@ async function tick(){
 setInterval(tick,150);
 
 bet.onclick = async ()=>{
+ if(betAmount>0) return;
  const a = parseFloat(amt.value);
  const r = await fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
  body:JSON.stringify({uid:uid,amount:a})});
  const j = await r.json();
- if(j.ok) betAmount=a;
+ if(j.ok){
+   betAmount=a;
+   bet.disabled=true;
+ }
 };
 
 cash.onclick = async ()=>{
