@@ -125,7 +125,7 @@ async def cashout(d: dict):
 def bal(uid: int):
     return {"balance": balance(uid)}
 
-# ---------- MINI APP (НОВЫЙ ВИЗУАЛ) ----------
+# ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
     return """
@@ -138,9 +138,10 @@ def index():
 <style>
 body{
  margin:0;
- background:radial-gradient(circle at top,#111827,#05070c);
+ background:#05070c;
  color:#fff;
  font-family:-apple-system,BlinkMacSystemFont,Arial;
+ overflow:hidden;
 }
 
 #app{
@@ -149,147 +150,133 @@ body{
  flex-direction:column;
  justify-content:space-between;
  padding:16px;
- box-sizing:border-box;
 }
 
-.top{
- display:flex;
- justify-content:space-between;
- align-items:center;
- opacity:.9;
-}
-
-.badge{
- background:#111827;
- padding:6px 12px;
- border-radius:20px;
- font-size:14px;
-}
+.top{display:flex;justify-content:space-between}
+.badge{background:#111827;padding:6px 14px;border-radius:20px}
 
 .center{
  flex:1;
  display:flex;
  flex-direction:column;
- justify-content:center;
  align-items:center;
+ justify-content:center;
 }
 
-#rocket{
- font-size:110px;
+.rocket{
+ font-size:100px;
+ position:relative;
  transition:transform .12s linear;
 }
-
-#x{
- font-size:54px;
- font-weight:700;
- margin-top:6px;
+.flame{
+ position:absolute;
+ bottom:-25px;
+ left:50%;
+ transform:translateX(-50%);
+ font-size:24px;
+ animation:flame .15s infinite alternate;
+}
+@keyframes flame{
+ from{transform:translateX(-50%) scale(1)}
+ to{transform:translateX(-50%) scale(1.3)}
 }
 
-#timer{
- opacity:.7;
- margin-bottom:6px;
-}
+#x{font-size:54px;font-weight:700}
+#timer{opacity:.7}
 
-.controls{
- margin-bottom:90px;
-}
-
-input{
+.controls{margin-bottom:90px}
+input,button{
  width:100%;
- padding:14px;
- font-size:18px;
- border-radius:14px;
- border:none;
- background:#111827;
- color:#fff;
- margin-bottom:10px;
-}
-
-button{
- width:100%;
- padding:18px;
- font-size:20px;
- font-weight:700;
+ padding:16px;
  border-radius:16px;
  border:none;
+ font-size:18px;
+ margin-top:8px;
 }
 
-#bet{
- background:#2563eb;
- color:#fff;
-}
-
-#bet:disabled{opacity:.5}
-
-#cash{
- background:#f59e0b;
- color:#000;
- display:none;
-}
+#bet{background:#2563eb;color:#fff}
+#cash{background:#f59e0b;color:#000;display:none}
 
 .bottom{
  position:fixed;
- bottom:0;
- left:0;
- right:0;
+ bottom:0;left:0;right:0;
  background:#0b0e14;
  display:flex;
  justify-content:space-around;
  padding:12px 0;
- opacity:.9;
 }
 
-.bottom div{
- font-size:13px;
- opacity:.6;
+.overlay{
+ position:fixed;
+ inset:0;
+ background:rgba(0,0,0,.8);
+ display:none;
+ align-items:center;
+ justify-content:center;
 }
 
-#hist{
+.card{
+ background:#111827;
+ padding:20px;
+ border-radius:18px;
  text-align:center;
- opacity:.6;
- font-size:14px;
- margin-top:8px;
 }
 </style>
 </head>
 
 <body>
 <div id="app">
+ <div class="top">
+  <div class="badge">👥 <span id="on"></span></div>
+  <div class="badge">💰 <span id="bal"></span>$</div>
+ </div>
 
-<div class="top">
- <div class="badge">👥 <span id="on"></span></div>
- <div class="badge">💰 <span id="bal"></span>$</div>
+ <div class="center" id="crashView">
+  <div id="timer"></div>
+  <div class="rocket" id="rocket">
+    🚀
+    <div class="flame">🔥</div>
+  </div>
+  <div id="x">1.00x</div>
+ </div>
+
+ <div class="controls">
+  <input id="amt" type="number" value="10">
+  <button id="bet">Сделать ставку</button>
+  <button id="cash"></button>
+ </div>
+
+ <div class="bottom">
+  <div>🏆 Топ</div>
+  <div onclick="showCrash()">🚀 Краш</div>
+  <div onclick="showProfile()">👤 Профиль</div>
+ </div>
 </div>
 
-<div class="center">
- <div id="timer"></div>
- <div id="rocket">🚀</div>
- <div id="x">1.00x</div>
- <div id="hist"></div>
-</div>
-
-<div class="controls">
- <input id="amt" type="number" value="10" inputmode="decimal">
- <button id="bet">Сделать ставку</button>
- <button id="cash"></button>
-</div>
-
-<div class="bottom">
- <div>🏆 Топ</div>
- <div style="opacity:1">🚀 Краш</div>
- <div>👤 Профиль</div>
-</div>
-
+<div class="overlay" id="profile">
+ <div class="card">
+  <h3>👤 Профиль</h3>
+  <div>ID: <span id="pid"></span></div>
+  <div>Баланс: <span id="pbal"></span>$</div>
+  <br>
+  <button onclick="hideProfile()">Назад</button>
+ </div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-let lastState="";
+pid.innerText = uid;
 
-amt.addEventListener("keydown",e=>{
- if(e.key==="Enter") amt.blur();
-});
+function showProfile(){
+ profile.style.display="flex";
+}
+function hideProfile(){
+ profile.style.display="none";
+}
+function showCrash(){
+ hideProfile();
+}
 
 async function tick(){
  let s = await fetch("/state").then(r=>r.json());
@@ -297,14 +284,13 @@ async function tick(){
 
  on.innerText=s.online;
  bal.innerText=b.balance.toFixed(2);
+ pbal.innerText=b.balance.toFixed(2);
  x.innerText=s.x.toFixed(2)+"x";
- hist.innerHTML=s.history.map(h=>h+"x").join(" · ");
- timer.innerText=s.state==="waiting" ? "Старт через "+s.timer+"с" : "";
+ timer.innerText=s.state==="waiting"?"Старт через "+s.timer+"с":"";
 
  if(s.state==="flying"){
   rocket.style.transform="translateY(-"+(s.x*6)+"px)";
   bet.style.display="none";
-
   if(s.bets && s.bets[uid]){
     cash.style.display="block";
     cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
@@ -319,21 +305,17 @@ async function tick(){
   cash.style.display="none";
  }
 
- if(s.state==="crashed" && lastState!=="crashed"){
+ if(s.state==="crashed"){
   rocket.innerText="💥";
+  cash.style.display="none";
  }
-
- lastState=s.state;
 }
-
 setInterval(tick,120);
 
 bet.onclick=async ()=>{
- let a=parseFloat(amt.value);
- amt.blur();
  bet.disabled=true;
  await fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
- body:JSON.stringify({uid:uid,amount:a})});
+ body:JSON.stringify({uid:uid,amount:parseFloat(amt.value)})});
 };
 
 cash.onclick=async ()=>{
@@ -342,7 +324,6 @@ cash.onclick=async ()=>{
  cash.style.display="none";
 };
 </script>
-
 </body>
 </html>
 """
