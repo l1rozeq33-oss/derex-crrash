@@ -35,7 +35,7 @@ bot = ApplicationBuilder().token(BOT_TOKEN).build()
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb = [[InlineKeyboardButton("🚀 Играть в Crash", web_app=WebAppInfo(url=WEBAPP_URL))]]
     await update.message.reply_text(
-        "🎰 DEREX CASINO\n\nCrash Game",
+        "🎰 DEREX CASINO\nCrash Game",
         reply_markup=InlineKeyboardMarkup(kb)
     )
 
@@ -56,7 +56,7 @@ GAME = {
     "x": 1.0,
     "crash": 0,
     "bets": {},
-    "online": random.randint(15, 35),
+    "online": random.randint(15, 40),
     "history": [],
     "start_at": time.time()
 }
@@ -125,8 +125,7 @@ def bal(uid: int):
 # ---------- MINI APP ----------
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
-<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -134,58 +133,46 @@ def index():
 <style>
 body{
  margin:0;
- background:radial-gradient(circle at top,#14182a,#0b0e14);
+ background:radial-gradient(circle at top,#1a1f3c,#080b14);
  color:#fff;
- font-family:Arial
+ font-family:Arial;
 }
 #app{
  height:100vh;
  display:flex;
- flex-direction:column;
  align-items:center;
  justify-content:center;
- text-align:center
 }
-#panel{
- width:92%;
- max-width:420px;
- background:#12162a;
- border-radius:24px;
- padding:22px;
- box-shadow:0 0 40px rgba(0,0,0,.6)
+#card{
+ width:94%;
+ max-width:440px;
+ background:linear-gradient(180deg,#151a33,#0b0e18);
+ border-radius:28px;
+ padding:24px;
+ box-shadow:0 0 60px rgba(0,0,0,.7);
+ text-align:center;
 }
-#rocket{font-size:110px;transition:transform .12s}
-#x{font-size:76px;font-weight:900;margin:10px}
-#timer{font-size:22px;opacity:.7;margin-bottom:6px}
-#top{margin-bottom:10px}
-input,button{
+#rocket{font-size:120px;transition:transform .12s}
+#x{font-size:84px;font-weight:900;margin:12px}
+#timer{opacity:.7;font-size:20px}
+button,input{
  width:100%;
- padding:18px;
- font-size:22px;
- border-radius:18px;
+ padding:20px;
+ font-size:24px;
+ border-radius:20px;
  border:none;
- margin-top:10px
+ margin-top:12px;
 }
-#bet{background:#1c2036;color:#fff}
-#bet:disabled{opacity:.4}
-#cash{
- background:#ff8c1a;
- color:#000;
- font-weight:900;
- display:none
-}
-#hist{margin-top:12px}
+#bet{background:#202652;color:#fff}
+#cash{background:#ff8c1a;color:#000;font-weight:900;display:none}
 #hist span{margin:0 5px;opacity:.7}
 </style>
 </head>
 <body>
 <div id="app">
-<div id="panel">
-<div id="top">
-<div>💰 Баланс: <span id="bal">0</span>$</div>
+<div id="card">
+<div>💰 Баланс: <b><span id="bal">0</span>$</b></div>
 <div>👥 Online: <span id="on"></span></div>
-</div>
-
 <div id="timer"></div>
 <div id="rocket">🚀</div>
 <div id="x">1.00x</div>
@@ -202,24 +189,23 @@ input,button{
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
 
-let lastState="";
-let betAmount=0;
+let betAmount = 0;
+let lastState = "";
 
 async function tick(){
- let s = await fetch("/state").then(r=>r.json());
+ const s = await fetch("/state").then(r=>r.json());
  x.innerText = s.x.toFixed(2)+"x";
  on.innerText = s.online;
  hist.innerHTML = s.history.map(h=>"<span>"+h+"x</span>").join("");
 
- let b = await fetch("/balance/"+uid).then(r=>r.json());
+ const b = await fetch("/balance/"+uid).then(r=>r.json());
  bal.innerText = b.balance.toFixed(2);
 
  if(s.state==="waiting"){
-  let t = Math.max(0, Math.ceil(s.start_at - Date.now()/1000));
-  timer.innerText = "Старт через " + t + " сек";
+  timer.innerText = "Старт через " + Math.max(0,Math.ceil(s.start_at-Date.now()/1000))+" сек";
   rocket.style.transform="translateY(0)";
-  bet.disabled=false;
   bet.style.display="block";
+  bet.disabled=false;
   cash.style.display="none";
   betAmount=0;
  }
@@ -227,7 +213,6 @@ async function tick(){
  if(s.state==="flying"){
   timer.innerText="";
   rocket.style.transform="translateY(-"+(s.x*9)+"px)";
-  bet.disabled=true;
   bet.style.display="none";
   if(betAmount>0){
     cash.style.display="block";
@@ -237,34 +222,28 @@ async function tick(){
 
  if(s.state==="crashed" && lastState!=="crashed"){
   rocket.innerText="💥";
+  navigator.vibrate?.(300);
   setTimeout(()=>rocket.innerText="🚀",1000);
  }
 
  lastState=s.state;
 }
 
-setInterval(tick,160);
+setInterval(tick,150);
 
 bet.onclick = async ()=>{
- let a = parseFloat(amt.value);
- let r = await fetch("/bet",{
-   method:"POST",
-   headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({uid:uid,amount:a})
- });
- let j = await r.json();
+ const a = parseFloat(amt.value);
+ const r = await fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid:uid,amount:a})});
+ const j = await r.json();
  if(j.ok) betAmount=a;
 };
 
 cash.onclick = async ()=>{
- await fetch("/cashout",{
-   method:"POST",
-   headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({uid:uid})
- });
+ await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid:uid})});
  cash.style.display="none";
 };
 </script>
 </body>
-</html>
-"""
+</html>"""
