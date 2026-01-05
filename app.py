@@ -1,93 +1,112 @@
-import json
-import os
-import random
-import time
-import threading
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
+import threading, time, random, sqlite3
 
 app = FastAPI()
 
-DATA_FILE = "data.json"
-ADMIN_TG_ID = 123456789  # <-- ВСТАВЬ СЮДА СВОЙ TG ID
+# ================== DATABASE ==================
 
-# -------------------- STORAGE --------------------
+conn = sqlite3.connect("db.sqlite", check_same_thread=False)
+cur = conn.cursor()
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    balance INTEGER
+)
+""")
+conn.commit()
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"users": {}, "history": []}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+def get_balance(uid):
+    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
+    r = cur.fetchone()
+    if r is None:
+        cur.execute("INSERT INTO users VALUES (?,?)", (uid, 1000))
+        conn.commit()
+        return 1000
+    return r[0]
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
+def set_balance(uid, bal):
+    cur.execute("UPDATE users SET balance=? WHERE id=?", (bal, uid))
+    conn.commit()
 
-data = load_data()
+# ================== GAME STATE ==================
 
-# -------------------- GAME STATE --------------------
-
-game = {
-    "running": False,
-    "multiplier": 1.0,
-    "crash_at": 0,
-    "start_time": 0
+state = {
+    "mult": 1.0,
+    "flying": False,
+    "crashed": False,
+    "history": [],
 }
+
+bets = {}        # user -> bet
+locked = set()  # защита от спама
+
+# ================== GAME LOOP ==================
 
 def game_loop():
     while True:
-        game["running"] = True
-        game["multiplier"] = 1.0
-        game["crash_at"] = round(random.uniform(1.5, 6.0), 2)
-        game["start_time"] = time.time()
+        state["mult"] = 1.0
+        state["flying"] = True
+        state["crashed"] = False
+        crash = random.uniform(1.7, 6.5)
 
-        while game["running"]:
-            elapsed = time.time() - game["start_time"]
-            game["multiplier"] = round(1 + elapsed * 0.6, 2)
-            if game["multiplier"] >= game["crash_at"]:
-                game["running"] = False
-                data["history"].insert(0, game["crash_at"])
-                data["history"] = data["history"][:10]
-                save_data(data)
-                break
+        while state["mult"] < crash:
             time.sleep(0.1)
+            state["mult"] += 0.05
 
+        state["crashed"] = True
+        state["flying"] = False
+        state["history"].insert(0, round(state["mult"], 2))
+        state["history"] = state["history"][:12]
+        bets.clear()
+        locked.clear()
         time.sleep(3)
 
 threading.Thread(target=game_loop, daemon=True).start()
 
-# -------------------- API --------------------
+# ================== API ==================
 
 @app.get("/state")
-def state():
-    return {
-        "running": game["running"],
-        "multiplier": game["multiplier"],
-        "history": data["history"]
-    }
+def get_state():
+    return state
 
-@app.get("/balance/{user_id}")
-def balance(user_id: str):
-    if user_id not in data["users"]:
-        data["users"][user_id] = {"balance": 0}
-        save_data(data)
-    return {"balance": data["users"][user_id]["balance"]}
+@app.get("/balance/{u}")
+def bal(u: str):
+    return {"balance": get_balance(u)}
 
-@app.post("/bet/{user_id}")
-def bet(user_id: str):
-    if user_id not in data["users"]:
-        data["users"][user_id] = {"balance": 0}
-    if data["users"][user_id]["balance"] <= 0:
-        return {"error": "no money"}
+@app.post("/bet/{u}/{a}")
+def bet(u: str, a: int):
+    if u in locked or state["flying"]:
+        return {"ok": False}
+    bal = get_balance(u)
+    if a <= 0 or a > bal:
+        return {"ok": False}
+
+    locked.add(u)
+    set_balance(u, bal - a)
+    bets[u] = a
     return {"ok": True}
 
-@app.get("/admin/{tg_id}")
-def admin(tg_id: int):
-    if tg_id != ADMIN_TG_ID:
-        return {"error": "forbidden"}
-    return data
+@app.post("/cashout/{u}")
+def cashout(u: str):
+    if u not in bets or state["crashed"]:
+        return {"ok": False}
 
-# -------------------- UI --------------------
+    win = int(bets[u] * state["mult"])
+    set_balance(u, get_balance(u) + win)
+    del bets[u]
+    return {"ok": True, "win": win}
+
+# ================== ADMIN ==================
+
+@app.get("/admin")
+def admin():
+    return {
+        "bets": bets,
+        "state": state
+    }
+
+# ================== FRONT ==================
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -98,76 +117,76 @@ def index():
 <meta charset="utf-8">
 <title>Crash</title>
 <style>
-body {
-    margin: 0;
-    background: radial-gradient(circle at top, #1b1f3b, #0b0e1a);
-    color: white;
-    font-family: Arial, sans-serif;
-    text-align: center;
-}
-#mult {
-    font-size: 64px;
-    margin-top: 80px;
-}
-#history {
-    margin-top: 20px;
-    opacity: 0.8;
-}
-.buttons {
-    position: fixed;
-    bottom: 60px;
-    width: 100%;
-}
-button {
-    padding: 12px 20px;
-    margin: 5px;
-    font-size: 16px;
-    border-radius: 8px;
-    border: none;
-}
+body{margin:0;background:#0b0f1a;color:#fff;font-family:Arial}
+.top{display:flex;justify-content:space-between;padding:15px;background:#111}
+.box{background:#161b2e;padding:15px;border-radius:10px}
+#game{height:320px;position:relative;overflow:hidden}
+#rocket{position:absolute;font-size:42px;left:10px;bottom:10px}
+button{padding:10px 18px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:16px}
+button:disabled{opacity:.4}
 </style>
 </head>
 <body>
 
-<div id="mult">1.00x</div>
-<div id="history"></div>
+<div class="top">
+ <div class="box">Баланс: <span id="bal">0</span> 💰</div>
+ <div class="box">CRASH</div>
+</div>
 
-<div class="buttons">
-    <button onclick="deposit()">Пополнить</button>
-    <button onclick="cashout()" id="cashoutBtn">Вывести</button>
-    <button>Crash</button>
+<div class="box" style="margin:15px">
+ <h1 id="mult">1.00x</h1>
+ <div id="game">
+   <div id="rocket">🚀</div>
+ </div>
+ <div id="hist"></div>
+</div>
+
+<div class="box" style="margin:15px">
+ <input id="amt" type="number" value="100">
+ <button id="bet">Ставка</button>
+ <button id="out" style="display:none">Вывести</button>
 </div>
 
 <script>
-let cashed = false;
+let u="user1", locked=false;
 
-async function update() {
-    const s = await fetch("/state").then(r => r.json());
+async function upd(){
+ let s=await fetch("/state").then(r=>r.json());
+ document.getElementById("mult").innerText=s.mult.toFixed(2)+"x";
+ document.getElementById("hist").innerHTML=s.history.map(x=>x+"x").join(" ");
 
-    document.getElementById("mult").innerText =
-        s.running ? s.multiplier.toFixed(2) + "x" : "CRASH";
-
-    document.getElementById("history").innerText =
-        "History: " + s.history.join(" | ");
-
-    if (!s.running) {
-        cashed = false;
-        document.getElementById("cashoutBtn").style.display = "inline-block";
-    }
+ let r=document.getElementById("rocket");
+ if(s.flying){
+   r.style.left=(s.mult*40)+"px";
+   r.style.bottom=(s.mult*15)+"px";
+ }else{
+   r.style.left="10px";r.style.bottom="10px";
+   document.getElementById("out").style.display="none";
+   locked=false;
+ }
 }
+setInterval(upd,100);
 
-function cashout() {
-    if (cashed) return;
-    cashed = true;
-    document.getElementById("cashoutBtn").style.display = "none";
-    alert("Автоматический вывод временно недоступен. Support Derex.");
+async function bal(){
+ let b=await fetch("/balance/"+u).then(r=>r.json());
+ document.getElementById("bal").innerText=b.balance;
 }
+bal();
 
-function deposit() {
-    alert("Автоматическое пополнение временно недоступно. Support Derex.");
-}
+document.getElementById("bet").onclick=async()=>{
+ if(locked) return;
+ locked=true;
+ let a=document.getElementById("amt").value;
+ let r=await fetch("/bet/"+u+"/"+a,{method:"POST"}).then(r=>r.json());
+ if(r.ok) document.getElementById("out").style.display="inline";
+ bal();
+};
 
-setInterval(update, 300);
+document.getElementById("out").onclick=async()=>{
+ document.getElementById("out").style.display="none";
+ await fetch("/cashout/"+u,{method:"POST"});
+ bal();
+};
 </script>
 
 </body>
