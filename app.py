@@ -30,7 +30,8 @@ state = {
     "timer": 5,
     "x": 1.00,
     "bets": {},
-    "online": random.randint(10, 40)
+    "online": random.randint(10, 40),
+    "history_x": []
 }
 
 # ================= GAME LOOP =================
@@ -40,6 +41,7 @@ async def game_loop():
         state["timer"] = 5
         state["bets"] = {}
         state["x"] = 1.00
+        state["history_x"] = []
         state["online"] = random.randint(10, 40)
 
         for i in range(5, 0, -1):
@@ -54,6 +56,7 @@ async def game_loop():
 
         while state["x"] < crash_at:
             state["x"] = round(state["x"] + 0.01, 2)
+            state["history_x"].append(state["x"])
             await asyncio.sleep(0.12)
 
         state["state"] = "crashed"
@@ -149,83 +152,23 @@ def index():
 <style>
 body{
  margin:0;
- background:
-  radial-gradient(circle at top,#1e293b,#020617),
-  linear-gradient(120deg,#020617,#020617);
+ background:radial-gradient(circle at top,#1e293b,#020617);
  color:#fff;
  font-family:Arial;
  overflow:hidden;
 }
-#app{
- padding:16px;
- height:100vh;
- display:flex;
- flex-direction:column;
- justify-content:space-between
-}
-.badge{
- background:rgba(2,6,23,.8);
- padding:8px 16px;
- border-radius:20px
-}
+#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
+.badge{background:#020617;padding:8px 16px;border-radius:20px}
 .center{text-align:center}
-.rocket{
- font-size:110px;
- transition:transform .9s cubic-bezier(.4,1.6,.6,1),opacity .9s
-}
-.flyaway{
- transform:translate(240px,-260px) rotate(45deg);
- opacity:0
-}
-input,button{
- width:100%;
- padding:18px;
- border-radius:16px;
- border:none;
- font-size:20px;
- margin-top:10px
-}
-input{
- background:#0f172a;
- color:#38bdf8
-}
-button{
- background:#2563eb;
- color:white
-}
-#cash{
- background:#f59e0b;
- color:black;
- display:none
-}
-.menu{
- display:flex;
- justify-content:space-around;
- background:rgba(2,6,23,.9);
- padding:18px;
- margin-bottom:24px;
- border-radius:24px
-}
-.menu div{
- padding:10px 14px;
- border-radius:14px;
- background:#020617;
-}
-.popup{
- position:fixed;
- top:20px;
- left:50%;
- transform:translateX(-50%);
- background:#020617;
- padding:14px 22px;
- border-radius:18px;
- display:none;
- animation:pop .4s ease
-}
-@keyframes pop{
- from{transform:translateX(-50%) scale(.8);opacity:0}
- to{transform:translateX(-50%) scale(1);opacity:1}
-}
+.rocket{font-size:110px;transition:transform .9s cubic-bezier(.4,1.6,.6,1),opacity .9s}
+.flyaway{transform:translate(240px,-260px) rotate(45deg);opacity:0}
+input,button{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}
+input{background:#0f172a;color:#38bdf8}
+button{background:#2563eb;color:white}
+#cash{background:#f59e0b;color:black;display:none}
+.menu{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:12px;border-radius:20px}
+.popup{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#020617;padding:14px 22px;border-radius:18px;display:none}
+#hx{font-size:12px;opacity:.6;margin-top:6px}
 #admin{display:none}
 </style>
 </head>
@@ -243,6 +186,7 @@ button{
   <div id="timer"></div>
   <div class="rocket" id="rocket">🚀</div>
   <div id="x">1.00x</div>
+  <div id="hx"></div>
  </div>
 
  <div>
@@ -252,9 +196,9 @@ button{
  </div>
 
  <div class="menu">
-  <div onclick="showPopup('Автоматическое пополнение временно недоступно. Напишите @DerexSupport')">➕ Пополнить</div>
+  <div onclick="showPopup('Пополнение временно недоступно')">➕ Пополнить</div>
   <div>🚀 Краш</div>
-  <div onclick="showPopup('Автоматический вывод временно недоступен. Напишите @DerexSupport')">💸 Вывести</div>
+  <div onclick="showPopup('Вывод временно недоступен')">💸 Вывести</div>
   <div id="admin" onclick="openAdmin()">👑 Админ</div>
  </div>
 </div>
@@ -262,24 +206,24 @@ button{
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-if(uid == "__ADMIN__") document.getElementById("admin").style.display="block";
+if(uid == "__ADMIN__") admin.style.display="block";
 
 let cashed=false, lastState="";
-const popup=document.getElementById("popup");
 
 function showPopup(t){
  popup.innerText=t;
  popup.style.display="block";
- setTimeout(()=>popup.style.display="none",2800);
+ setTimeout(()=>popup.style.display="none",2600);
 }
 
 async function tick(){
- let s=await fetch("/state").then(r=>r.json());
- let b=await fetch("/balance/"+uid).then(r=>r.json());
+ const s = await fetch("/state").then(r=>r.json());
+ const b = await fetch("/balance/"+uid).then(r=>r.json());
 
  on.innerText=s.online;
  bal.innerText=b.balance.toFixed(2);
  x.innerText=s.x.toFixed(2)+"x";
+ hx.innerText=s.history_x.slice(-15).join("  ");
  timer.innerText=s.state=="waiting"?"Старт через "+s.timer:"";
 
  if(s.state=="flying"){
@@ -318,17 +262,17 @@ bet.onclick=()=>fetch("/bet",{
 cash.onclick=async ()=>{
  cashed=true;
  cash.style.display="none";
- let r=await fetch("/cashout",{
+ const r=await fetch("/cashout",{
   method:"POST",
   headers:{'Content-Type':'application/json'},
   body:JSON.stringify({uid})
  }).then(r=>r.json());
- showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
+ showPopup("+"+r.win+"$ | x"+r.x);
 }
 
 function openAdmin(){
- let u=prompt("TG ID");
- let a=prompt("Сумма");
+ const u=prompt("TG ID");
+ const a=prompt("Сумма");
  fetch("/admin/add",{
   method:"POST",
   headers:{'Content-Type':'application/json'},
