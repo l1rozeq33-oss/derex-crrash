@@ -1,194 +1,342 @@
+import json
+import random
+import asyncio
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
-import threading, time, random, sqlite3
+from fastapi.responses import HTMLResponse
+
+ADMIN_ID = "7963516753"
 
 app = FastAPI()
 
-# ================== DATABASE ==================
+BAL_FILE = "balances.json"
+HIST_FILE = "history.json"
 
-conn = sqlite3.connect("db.sqlite", check_same_thread=False)
-cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    id TEXT PRIMARY KEY,
-    balance INTEGER
-)
-""")
-conn.commit()
+def load(path, default):
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except:
+        return default
 
-def get_balance(uid):
-    cur.execute("SELECT balance FROM users WHERE id=?", (uid,))
-    r = cur.fetchone()
-    if r is None:
-        cur.execute("INSERT INTO users VALUES (?,?)", (uid, 1000))
-        conn.commit()
-        return 1000
-    return r[0]
+def save(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f)
 
-def set_balance(uid, bal):
-    cur.execute("UPDATE users SET balance=? WHERE id=?", (bal, uid))
-    conn.commit()
-
-# ================== GAME STATE ==================
+balances = load(BAL_FILE, {})
+history = load(HIST_FILE, {})
 
 state = {
-    "mult": 1.0,
-    "flying": False,
-    "crashed": False,
-    "history": [],
+    "state": "waiting",
+    "timer": 5,
+    "x": 1.00,
+    "bets": {},
+    "online": random.randint(10, 40)
 }
 
-bets = {}        # user -> bet
-locked = set()  # защита от спама
-
-# ================== GAME LOOP ==================
-
-def game_loop():
+# ================= GAME LOOP =================
+async def game_loop():
     while True:
-        state["mult"] = 1.0
-        state["flying"] = True
-        state["crashed"] = False
-        crash = random.uniform(1.7, 6.5)
+        state["state"] = "waiting"
+        state["timer"] = 5
+        state["bets"] = {}
+        state["x"] = 1.00
+        state["online"] = random.randint(10, 40)
 
-        while state["mult"] < crash:
-            time.sleep(0.1)
-            state["mult"] += 0.05
+        for i in range(5, 0, -1):
+            state["timer"] = i
+            await asyncio.sleep(1)
 
-        state["crashed"] = True
-        state["flying"] = False
-        state["history"].insert(0, round(state["mult"], 2))
-        state["history"] = state["history"][:12]
-        bets.clear()
-        locked.clear()
-        time.sleep(3)
+        state["state"] = "flying"
+        crash_at = random.choice(
+            [round(random.uniform(1.0, 1.3), 2)] * 4 +
+            [round(random.uniform(1.5, 4.5), 2)]
+        )
 
-threading.Thread(target=game_loop, daemon=True).start()
+        while state["x"] < crash_at:
+            state["x"] = round(state["x"] + 0.01, 2)
+            await asyncio.sleep(0.12)
 
-# ================== API ==================
+        state["state"] = "crashed"
 
+        for uid, bet in list(state["bets"].items()):
+            history.setdefault(uid, []).append({
+                "bet": bet,
+                "result": "crash",
+                "x": state["x"]
+            })
+
+        save(HIST_FILE, history)
+        await asyncio.sleep(2)
+
+@app.on_event("startup")
+async def startup():
+    asyncio.get_event_loop().create_task(game_loop())
+
+# ================= API =================
 @app.get("/state")
 def get_state():
     return state
 
-@app.get("/balance/{u}")
-def bal(u: str):
-    return {"balance": get_balance(u)}
+@app.get("/balance/{uid}")
+def get_balance(uid: str):
+    balances.setdefault(uid, 0)
+    save(BAL_FILE, balances)
+    return {"balance": balances[uid]}
 
-@app.post("/bet/{u}/{a}")
-def bet(u: str, a: int):
-    if u in locked or state["flying"]:
-        return {"ok": False}
-    bal = get_balance(u)
-    if a <= 0 or a > bal:
-        return {"ok": False}
+@app.post("/bet")
+async def bet(data: dict):
+    uid = str(data["uid"])
+    amt = float(data["amount"])
 
-    locked.add(u)
-    set_balance(u, bal - a)
-    bets[u] = a
+    if state["state"] != "waiting":
+        return {"error": "round started"}
+
+    if uid in state["bets"]:
+        return {"error": "already bet"}
+
+    if balances.get(uid, 0) < amt:
+        return {"error": "no money"}
+
+    balances[uid] -= amt
+    state["bets"][uid] = amt
+    save(BAL_FILE, balances)
     return {"ok": True}
 
-@app.post("/cashout/{u}")
-def cashout(u: str):
-    if u not in bets or state["crashed"]:
-        return {"ok": False}
+@app.post("/cashout")
+async def cashout(data: dict):
+    uid = str(data["uid"])
 
-    win = int(bets[u] * state["mult"])
-    set_balance(u, get_balance(u) + win)
-    del bets[u]
-    return {"ok": True, "win": win}
+    if uid not in state["bets"]:
+        return {"error": "no bet"}
 
-# ================== ADMIN ==================
+    win = round(state["bets"][uid] * state["x"], 2)
+    balances[uid] += win
 
-@app.get("/admin")
-def admin():
-    return {
-        "bets": bets,
-        "state": state
-    }
+    history.setdefault(uid, []).append({
+        "bet": state["bets"][uid],
+        "result": "win",
+        "x": state["x"]
+    })
 
-# ================== FRONT ==================
+    del state["bets"][uid]
+    save(BAL_FILE, balances)
+    save(HIST_FILE, history)
 
+    return {"win": win, "x": state["x"]}
+
+@app.post("/admin/add")
+async def admin_add(data: dict):
+    if str(data["admin"]) != ADMIN_ID:
+        return {"error": "forbidden"}
+
+    uid = str(data["uid"])
+    amt = float(data["amount"])
+    balances[uid] = balances.get(uid, 0) + amt
+    save(BAL_FILE, balances)
+    return {"ok": True}
+
+# ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Crash</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<title>DerexCasino</title>
+
 <style>
-body{margin:0;background:#0b0f1a;color:#fff;font-family:Arial}
-.top{display:flex;justify-content:space-between;padding:15px;background:#111}
-.box{background:#161b2e;padding:15px;border-radius:10px}
-#game{height:320px;position:relative;overflow:hidden}
-#rocket{position:absolute;font-size:42px;left:10px;bottom:10px}
-button{padding:10px 18px;border:0;border-radius:8px;background:#3b82f6;color:#fff;font-size:16px}
-button:disabled{opacity:.4}
+body{
+ margin:0;
+ background:
+  radial-gradient(circle at top,#1e293b,#020617),
+  linear-gradient(120deg,#020617,#020617);
+ color:#fff;
+ font-family:Arial;
+ overflow:hidden;
+}
+#app{
+ padding:16px;
+ height:100vh;
+ display:flex;
+ flex-direction:column;
+ justify-content:space-between
+}
+.badge{
+ background:rgba(2,6,23,.8);
+ padding:8px 16px;
+ border-radius:20px
+}
+.center{text-align:center}
+.rocket{
+ font-size:110px;
+ transition:transform .9s cubic-bezier(.4,1.6,.6,1),opacity .9s
+}
+.flyaway{
+ transform:translate(240px,-260px) rotate(45deg);
+ opacity:0
+}
+input,button{
+ width:100%;
+ padding:18px;
+ border-radius:16px;
+ border:none;
+ font-size:20px;
+ margin-top:10px
+}
+input{
+ background:#0f172a;
+ color:#38bdf8
+}
+button{
+ background:#2563eb;
+ color:white
+}
+#cash{
+ background:#f59e0b;
+ color:black;
+ display:none
+}
+.menu{
+ display:flex;
+ justify-content:space-around;
+ background:rgba(2,6,23,.9);
+ padding:18px;
+ margin-bottom:24px;
+ border-radius:24px
+}
+.menu div{
+ padding:10px 14px;
+ border-radius:14px;
+ background:#020617;
+}
+.popup{
+ position:fixed;
+ top:20px;
+ left:50%;
+ transform:translateX(-50%);
+ background:#020617;
+ padding:14px 22px;
+ border-radius:18px;
+ display:none;
+ animation:pop .4s ease
+}
+@keyframes pop{
+ from{transform:translateX(-50%) scale(.8);opacity:0}
+ to{transform:translateX(-50%) scale(1);opacity:1}
+}
+#admin{display:none}
 </style>
 </head>
+
 <body>
+<div class="popup" id="popup"></div>
 
-<div class="top">
- <div class="box">Баланс: <span id="bal">0</span> 💰</div>
- <div class="box">CRASH</div>
-</div>
-
-<div class="box" style="margin:15px">
- <h1 id="mult">1.00x</h1>
- <div id="game">
-   <div id="rocket">🚀</div>
+<div id="app">
+ <div style="display:flex;justify-content:space-between">
+  <div class="badge">👥 <span id="on"></span></div>
+  <div class="badge">💰 <span id="bal"></span>$</div>
  </div>
- <div id="hist"></div>
-</div>
 
-<div class="box" style="margin:15px">
- <input id="amt" type="number" value="100">
- <button id="bet">Ставка</button>
- <button id="out" style="display:none">Вывести</button>
+ <div class="center">
+  <div id="timer"></div>
+  <div class="rocket" id="rocket">🚀</div>
+  <div id="x">1.00x</div>
+ </div>
+
+ <div>
+  <input id="amt" type="number" value="10">
+  <button id="bet">Сделать ставку</button>
+  <button id="cash"></button>
+ </div>
+
+ <div class="menu">
+  <div onclick="showPopup('Автоматическое пополнение временно недоступно. Напишите @DerexSupport')">➕ Пополнить</div>
+  <div>🚀 Краш</div>
+  <div onclick="showPopup('Автоматический вывод временно недоступен. Напишите @DerexSupport')">💸 Вывести</div>
+  <div id="admin" onclick="openAdmin()">👑 Админ</div>
+ </div>
 </div>
 
 <script>
-let u="user1", locked=false;
+const tg = Telegram.WebApp; tg.expand();
+const uid = tg.initDataUnsafe.user.id;
+if(uid == "__ADMIN__") document.getElementById("admin").style.display="block";
 
-async function upd(){
+let cashed=false, lastState="";
+const popup=document.getElementById("popup");
+
+function showPopup(t){
+ popup.innerText=t;
+ popup.style.display="block";
+ setTimeout(()=>popup.style.display="none",2800);
+}
+
+async function tick(){
  let s=await fetch("/state").then(r=>r.json());
- document.getElementById("mult").innerText=s.mult.toFixed(2)+"x";
- document.getElementById("hist").innerHTML=s.history.map(x=>x+"x").join(" ");
+ let b=await fetch("/balance/"+uid).then(r=>r.json());
 
- let r=document.getElementById("rocket");
- if(s.flying){
-   r.style.left=(s.mult*40)+"px";
-   r.style.bottom=(s.mult*15)+"px";
- }else{
-   r.style.left="10px";r.style.bottom="10px";
-   document.getElementById("out").style.display="none";
-   locked=false;
+ on.innerText=s.online;
+ bal.innerText=b.balance.toFixed(2);
+ x.innerText=s.x.toFixed(2)+"x";
+ timer.innerText=s.state=="waiting"?"Старт через "+s.timer:"";
+
+ if(s.state=="flying"){
+  rocket.classList.remove("flyaway");
+  bet.style.display="none";
+  if(s.bets[uid] && !cashed){
+   cash.style.display="block";
+   cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
+  }
  }
+
+ if(s.state=="crashed" && lastState!="crashed"){
+  rocket.classList.add("flyaway");
+  cash.style.display="none";
+  cashed=true;
+ }
+
+ if(s.state=="waiting"){
+  rocket.classList.remove("flyaway");
+  bet.style.display="block";
+  cash.style.display="none";
+  cashed=false;
+ }
+
+ lastState=s.state;
 }
-setInterval(upd,100);
 
-async function bal(){
- let b=await fetch("/balance/"+u).then(r=>r.json());
- document.getElementById("bal").innerText=b.balance;
+setInterval(tick,120);
+
+bet.onclick=()=>fetch("/bet",{
+ method:"POST",
+ headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid,amount:+amt.value})
+});
+
+cash.onclick=async ()=>{
+ cashed=true;
+ cash.style.display="none";
+ let r=await fetch("/cashout",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({uid})
+ }).then(r=>r.json());
+ showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
 }
-bal();
 
-document.getElementById("bet").onclick=async()=>{
- if(locked) return;
- locked=true;
- let a=document.getElementById("amt").value;
- let r=await fetch("/bet/"+u+"/"+a,{method:"POST"}).then(r=>r.json());
- if(r.ok) document.getElementById("out").style.display="inline";
- bal();
-};
-
-document.getElementById("out").onclick=async()=>{
- document.getElementById("out").style.display="none";
- await fetch("/cashout/"+u,{method:"POST"});
- bal();
-};
+function openAdmin(){
+ let u=prompt("TG ID");
+ let a=prompt("Сумма");
+ fetch("/admin/add",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({admin:uid,uid:u,amount:a})
+ });
+}
 </script>
-
 </body>
 </html>
 """
+    return HTMLResponse(html.replace("__ADMIN__", ADMIN_ID))
