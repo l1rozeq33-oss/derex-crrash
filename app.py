@@ -149,32 +149,83 @@ def index():
 <style>
 body{
  margin:0;
- background:radial-gradient(circle at top,#0f172a,#020617);
+ background:
+  radial-gradient(circle at top,#1e293b,#020617),
+  linear-gradient(120deg,#020617,#020617);
  color:#fff;
  font-family:Arial;
  overflow:hidden;
 }
-#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
-.badge{background:#020617;padding:8px 16px;border-radius:20px}
+#app{
+ padding:16px;
+ height:100vh;
+ display:flex;
+ flex-direction:column;
+ justify-content:space-between
+}
+.badge{
+ background:rgba(2,6,23,.8);
+ padding:8px 16px;
+ border-radius:20px
+}
 .center{text-align:center}
-.rocket{font-size:110px;transition:transform .9s cubic-bezier(.4,1.6,.6,1)}
-.flyaway{transform:translate(220px,-260px) rotate(45deg);opacity:0}
-input,button{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}
-input{background:#0f172a;color:#38bdf8}
-button{background:#2563eb;color:white}
-#cash{background:#f59e0b;color:black;display:none}
-.menu{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:12px;border-radius:20px}
-.menu div{opacity:.9}
+.rocket{
+ font-size:110px;
+ transition:transform .9s cubic-bezier(.4,1.6,.6,1),opacity .9s
+}
+.flyaway{
+ transform:translate(240px,-260px) rotate(45deg);
+ opacity:0
+}
+input,button{
+ width:100%;
+ padding:18px;
+ border-radius:16px;
+ border:none;
+ font-size:20px;
+ margin-top:10px
+}
+input{
+ background:#0f172a;
+ color:#38bdf8
+}
+button{
+ background:#2563eb;
+ color:white
+}
+#cash{
+ background:#f59e0b;
+ color:black;
+ display:none
+}
+.menu{
+ display:flex;
+ justify-content:space-around;
+ background:rgba(2,6,23,.9);
+ padding:18px;
+ margin-bottom:24px;
+ border-radius:24px
+}
+.menu div{
+ padding:10px 14px;
+ border-radius:14px;
+ background:#020617;
+}
 .popup{
- position:fixed;top:20px;left:50%;
+ position:fixed;
+ top:20px;
+ left:50%;
  transform:translateX(-50%);
  background:#020617;
  padding:14px 22px;
  border-radius:18px;
  display:none;
- animation:pop .4s ease;
+ animation:pop .4s ease
 }
-@keyframes pop{from{transform:translateX(-50%) scale(.8);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+@keyframes pop{
+ from{transform:translateX(-50%) scale(.8);opacity:0}
+ to{transform:translateX(-50%) scale(1);opacity:1}
+}
 #admin{display:none}
 </style>
 </head>
@@ -201,9 +252,9 @@ button{background:#2563eb;color:white}
  </div>
 
  <div class="menu">
-  <div onclick="alert('Пополнение временно недоступно')">➕ Пополнить</div>
+  <div onclick="showPopup('Автоматическое пополнение временно недоступно. Напишите @DerexSupport')">➕ Пополнить</div>
   <div>🚀 Краш</div>
-  <div onclick="alert('Вывод временно недоступен')">💸 Вывести</div>
+  <div onclick="showPopup('Автоматический вывод временно недоступен. Напишите @DerexSupport')">💸 Вывести</div>
   <div id="admin" onclick="openAdmin()">👑 Админ</div>
  </div>
 </div>
@@ -212,12 +263,14 @@ button{background:#2563eb;color:white}
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
 if(uid == "__ADMIN__") document.getElementById("admin").style.display="block";
+
 let cashed=false, lastState="";
+const popup=document.getElementById("popup");
 
 function showPopup(t){
  popup.innerText=t;
  popup.style.display="block";
- setTimeout(()=>popup.style.display="none",2600);
+ setTimeout(()=>popup.style.display="none",2800);
 }
 
 async function tick(){
@@ -256,17 +309,31 @@ async function tick(){
 
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,amount:+amt.value})});
+bet.onclick=()=>fetch("/bet",{
+ method:"POST",
+ headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({uid,amount:+amt.value})
+});
+
 cash.onclick=async ()=>{
  cashed=true;
- let r=await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})}).then(r=>r.json());
+ cash.style.display="none";
+ let r=await fetch("/cashout",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({uid})
+ }).then(r=>r.json());
  showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
 }
 
 function openAdmin(){
  let u=prompt("TG ID");
  let a=prompt("Сумма");
- fetch("/admin/add",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({admin:uid,uid:u,amount:a})});
+ fetch("/admin/add",{
+  method:"POST",
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({admin:uid,uid:u,amount:a})
+ });
 }
 </script>
 </body>
