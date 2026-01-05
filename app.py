@@ -6,6 +6,8 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
+ADMIN_ID = "7963516753"
+
 BAL_FILE = "balances.json"
 HIST_FILE = "history.json"
 
@@ -34,7 +36,6 @@ state = {
 # ================= GAME LOOP =================
 async def game_loop():
     while True:
-        # WAITING
         state["state"] = "waiting"
         state["timer"] = 5
         state["bets"] = {}
@@ -45,7 +46,6 @@ async def game_loop():
             state["timer"] = i
             await asyncio.sleep(1)
 
-        # FLYING
         state["state"] = "flying"
         crash_at = random.choice(
             [round(random.uniform(1.0, 1.3), 2)] * 4 +
@@ -56,7 +56,6 @@ async def game_loop():
             state["x"] = round(state["x"] + 0.01, 2)
             await asyncio.sleep(0.12)
 
-        # CRASH
         state["state"] = "crashed"
 
         for uid, bet in list(state["bets"].items()):
@@ -71,7 +70,7 @@ async def game_loop():
 
 @app.on_event("startup")
 async def startup():
-    asyncio.get_event_loop().create_task(game_loop())
+    asyncio.create_task(game_loop())
 
 # ================= API =================
 @app.get("/state")
@@ -123,9 +122,17 @@ async def cashout(data: dict):
 
     return {"win": win, "x": state["x"]}
 
-@app.get("/history/{uid}")
-def get_history(uid: str):
-    return history.get(uid, [])
+@app.post("/admin/add")
+def admin_add(data: dict):
+    if data.get("admin") != ADMIN_ID:
+        return {"error": "denied"}
+
+    uid = str(data["uid"])
+    amt = float(data["amount"])
+
+    balances[uid] = balances.get(uid, 0) + amt
+    save(BAL_FILE, balances)
+    return {"ok": True}
 
 # ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
@@ -134,36 +141,48 @@ def index():
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<title>DerexCasino</title>
+<title>Derex Crash</title>
 
 <style>
 body{
  margin:0;
- background:radial-gradient(circle at top,#1e293b,#020617);
+ background:radial-gradient(circle at top,#020617,#000);
  color:#fff;
  font-family:Arial;
  overflow:hidden;
 }
 #app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
-.badge{background:#111827;padding:8px 16px;border-radius:20px}
+.badge{background:#020617;padding:8px 16px;border-radius:20px}
 .center{text-align:center}
 .rocket{font-size:110px;transition:.12s}
-input,button{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}
-input{background:#0f172a;color:#38bdf8}
-button{background:#2563eb;color:white}
+input,button{width:100%;padding:18px;border-radius:18px;border:none;font-size:20px;margin-top:10px}
+input{background:#020617;color:#38bdf8}
+button{background:#2563eb;color:white;transition:.2s}
+button:active{transform:scale(.96)}
 #cash{background:#f59e0b;color:black;display:none}
-.menu{display:flex;justify-content:space-around;background:#020617;padding:14px}
-.menu div{opacity:.8}
-.popup{
- position:fixed;top:20px;left:50%;
- transform:translateX(-50%);
- background:#16a34a;
- padding:12px 20px;
- border-radius:14px;
- display:none;
+.menu{
+ display:flex;
+ justify-content:space-around;
+ background:#020617;
+ padding:18px;
+ border-radius:24px;
+ margin-top:-10px
 }
+.menu div{font-size:18px}
+.popup{
+ position:fixed;
+ top:20px;
+ left:50%;
+ transform:translateX(-50%) scale(.9);
+ background:#020617;
+ padding:14px 22px;
+ border-radius:16px;
+ display:none;
+ animation:pop .3s forwards;
+}
+@keyframes pop{to{transform:translateX(-50%) scale(1)}}
 </style>
 </head>
 
@@ -183,14 +202,14 @@ button{background:#2563eb;color:white}
  </div>
 
  <div>
-  <input id="amt" type="number" value="10">
+  <input id="amt" type="number" value="10" inputmode="numeric">
   <button id="bet">Сделать ставку</button>
   <button id="cash"></button>
  </div>
 
  <div class="menu">
   <div onclick="alert('Пополнение временно недоступно. Пишите @DerexSupport')">➕ Пополнить</div>
-  <div>🚀 Краш</div>
+  <div onclick="showGame()">🚀 Краш</div>
   <div onclick="alert('Вывод временно недоступен. Пишите @DerexSupport')">💸 Вывести</div>
  </div>
 </div>
@@ -246,7 +265,7 @@ cash.onclick=async ()=>{
  cashed=true;
  cash.style.display="none";
  let r=await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})}).then(r=>r.json());
- showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
+ showPopup("+"+r.win+"$ | x"+r.x);
 }
 </script>
 </body>
