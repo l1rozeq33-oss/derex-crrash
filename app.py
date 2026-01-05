@@ -4,9 +4,9 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-app = FastAPI()
+ADMIN_ID = "7963516753"
 
-ADMIN_ID = "123456789"  # <<< ВСТАВЬ СЮДА СВОЙ TG ID
+app = FastAPI()
 
 BAL_FILE = "balances.json"
 HIST_FILE = "history.json"
@@ -36,13 +36,11 @@ state = {
 # ================= GAME LOOP =================
 async def game_loop():
     while True:
-        state.update({
-            "state": "waiting",
-            "timer": 5,
-            "bets": {},
-            "x": 1.00,
-            "online": random.randint(10, 40)
-        })
+        state["state"] = "waiting"
+        state["timer"] = 5
+        state["bets"] = {}
+        state["x"] = 1.00
+        state["online"] = random.randint(10, 40)
 
         for i in range(5, 0, -1):
             state["timer"] = i
@@ -72,7 +70,7 @@ async def game_loop():
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(game_loop())
+    asyncio.get_event_loop().create_task(game_loop())
 
 # ================= API =================
 @app.get("/state")
@@ -81,9 +79,8 @@ def get_state():
 
 @app.get("/balance/{uid}")
 def get_balance(uid: str):
-    if uid not in balances:
-        balances[uid] = 0.0
-        save(BAL_FILE, balances)
+    balances.setdefault(uid, 0)
+    save(BAL_FILE, balances)
     return {"balance": balances[uid]}
 
 @app.post("/bet")
@@ -130,7 +127,8 @@ async def cashout(data: dict):
 @app.post("/admin/add")
 async def admin_add(data: dict):
     if str(data["admin"]) != ADMIN_ID:
-        return {"error": "no access"}
+        return {"error": "forbidden"}
+
     uid = str(data["uid"])
     amt = float(data["amount"])
     balances[uid] = balances.get(uid, 0) + amt
@@ -146,117 +144,130 @@ def index():
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<title>DerexCasino</title>
 
 <style>
 body {{
- background:#020617;
- color:white;
- font-family:Arial;
  margin:0;
+ background:radial-gradient(circle at top,#0f172a,#020617);
+ color:#fff;
+ font-family:Arial;
  overflow:hidden;
 }}
-.rocket {{
- font-size:110px;
- transition:transform 0.8s ease, opacity 0.8s ease;
-}}
-.fly {{
- transform:translate(280px,-320px) rotate(45deg);
- opacity:0;
-}}
-.menu {{
- display:flex;
- justify-content:space-around;
- padding:20px;
-}}
-button,input {{
- width:100%;
- padding:16px;
- border-radius:14px;
- margin-top:8px;
- border:none;
- font-size:18px;
-}}
-#popup {{
- position:fixed;
- top:20px;
- left:50%;
+#app{{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}}
+.badge{{background:#020617;padding:8px 16px;border-radius:20px}}
+.center{{text-align:center}}
+.rocket{{font-size:110px;transition:transform .9s cubic-bezier(.4,1.6,.6,1)}}
+.flyaway{{transform:translate(220px,-260px) rotate(45deg);opacity:0}}
+input,button{{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}}
+input{{background:#0f172a;color:#38bdf8}}
+button{{background:#2563eb;color:white}}
+#cash{{background:#f59e0b;color:black;display:none}}
+.menu{{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:12px;border-radius:20px}}
+.menu div{{opacity:.9}}
+.popup{{
+ position:fixed;top:20px;left:50%;
  transform:translateX(-50%);
  background:#020617;
- border:1px solid #22c55e;
  padding:14px 22px;
- border-radius:16px;
+ border-radius:18px;
  display:none;
+ animation:pop .4s ease;
 }}
+@keyframes pop{{from{{transform:translateX(-50%) scale(.8);opacity:0}}to{{transform:translateX(-50%) scale(1);opacity:1}}}}
+#admin{{display:none}}
 </style>
 </head>
 
 <body>
-<div id="popup"></div>
+<div class="popup" id="popup"></div>
 
 <div id="app">
-<div id="rocket" class="rocket">🚀</div>
-<div id="x">1.00x</div>
+ <div style="display:flex;justify-content:space-between">
+  <div class="badge">👥 <span id="on"></span></div>
+  <div class="badge">💰 <span id="bal"></span>$</div>
+ </div>
 
-<input id="amt" type="number" value="10">
-<button id="bet">Сделать ставку</button>
-<button id="cash" style="display:none;background:#f59e0b">Вывести</button>
+ <div class="center">
+  <div id="timer"></div>
+  <div class="rocket" id="rocket">🚀</div>
+  <div id="x">1.00x</div>
+ </div>
 
-<div class="menu">
- <div onclick="openAdmin()">⚙ Админка</div>
-</div>
+ <div>
+  <input id="amt" type="number" value="10">
+  <button id="bet">Сделать ставку</button>
+  <button id="cash"></button>
+ </div>
+
+ <div class="menu">
+  <div onclick="alert('Пополнение временно недоступно')">➕ Пополнить</div>
+  <div>🚀 Краш</div>
+  <div onclick="alert('Вывод временно недоступен')">💸 Вывести</div>
+  <div id="admin" onclick="openAdmin()">👑 Админ</div>
+ </div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-const ADMIN_ID = "{ADMIN_ID}";
-let crashed=false;
+if(uid == "{ADMIN_ID}") admin.style.display="block";
+let cashed=false, lastState="";
 
-function popup(t) {{
- let p=document.getElementById("popup");
- p.innerText=t;
- p.style.display="block";
- setTimeout(()=>p.style.display="none",2500);
-}}
+function showPopup(t){
+ popup.innerText=t;
+ popup.style.display="block";
+ setTimeout(()=>popup.style.display="none",2600);
+}
 
-async function tick(){{
+async function tick(){
  let s=await fetch("/state").then(r=>r.json());
- let r=document.getElementById("rocket");
+ let b=await fetch("/balance/"+uid).then(r=>r.json());
 
- document.getElementById("x").innerText=s.x.toFixed(2)+"x";
+ on.innerText=s.online;
+ bal.innerText=b.balance.toFixed(2);
+ x.innerText=s.x.toFixed(2)+"x";
+ timer.innerText=s.state=="waiting"?"Старт через "+s.timer:"";
 
- if(s.state==="flying"){{
-  crashed=false;
-  r.classList.remove("fly");
-  r.style.transform="translateY(-"+(s.x*6)+"px)";
- }}
+ if(s.state=="flying"){
+  rocket.classList.remove("flyaway");
+  bet.style.display="none";
+  if(s.bets[uid] && !cashed){
+   cash.style.display="block";
+   cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
+  }
+ }
 
- if(s.state==="crashed" && !crashed){{
-  crashed=true;
-  r.classList.add("fly");
- }}
+ if(s.state=="crashed" && lastState!="crashed"){
+  rocket.classList.add("flyaway");
+  cash.style.display="none";
+  cashed=true;
+ }
 
- if(s.state==="waiting"){{
-  r.classList.remove("fly");
-  r.style.transform="translateY(0)";
- }}
-}}
+ if(s.state=="waiting"){
+  rocket.classList.remove("flyaway");
+  bet.style.display="block";
+  cash.style.display="none";
+  cashed=false;
+ }
+
+ lastState=s.state;
+}
 
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{uid,amount:+amt.value}})}});
+bet.onclick=()=>fetch("/bet",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid,amount:+amt.value}})});
+cash.onclick=async ()=>{
+ cashed=true;
+ let r=await fetch("/cashout",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid}})}).then(r=>r.json());
+ showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
+}
 
-cash.onclick=async()=>{{
- let r=await fetch("/cashout",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{uid}})}}).then(r=>r.json());
- popup("+"+r.win+"$");
-}}
-
-function openAdmin(){{
- if(uid!=ADMIN_ID) return;
- let u=prompt("ID");
+function openAdmin(){
+ let u=prompt("TG ID");
  let a=prompt("Сумма");
- fetch("/admin/add",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{admin:uid,uid:u,amount:a}})}})
-}}
+ fetch("/admin/add",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{admin:uid,uid:u,amount:a}})});
+}
 </script>
 </body>
 </html>
