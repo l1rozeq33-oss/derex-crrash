@@ -138,7 +138,7 @@ async def admin_add(data: dict):
 # ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return f"""
+    html = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -147,25 +147,25 @@ def index():
 <title>DerexCasino</title>
 
 <style>
-body {{
+body{
  margin:0;
  background:radial-gradient(circle at top,#0f172a,#020617);
  color:#fff;
  font-family:Arial;
  overflow:hidden;
-}}
-#app{{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}}
-.badge{{background:#020617;padding:8px 16px;border-radius:20px}}
-.center{{text-align:center}}
-.rocket{{font-size:110px;transition:transform .9s cubic-bezier(.4,1.6,.6,1)}}
-.flyaway{{transform:translate(220px,-260px) rotate(45deg);opacity:0}}
-input,button{{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}}
-input{{background:#0f172a;color:#38bdf8}}
-button{{background:#2563eb;color:white}}
-#cash{{background:#f59e0b;color:black;display:none}}
-.menu{{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:12px;border-radius:20px}}
-.menu div{{opacity:.9}}
-.popup{{
+}
+#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
+.badge{background:#020617;padding:8px 16px;border-radius:20px}
+.center{text-align:center}
+.rocket{font-size:110px;transition:transform .9s cubic-bezier(.4,1.6,.6,1)}
+.flyaway{transform:translate(220px,-260px) rotate(45deg);opacity:0}
+input,button{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}
+input{background:#0f172a;color:#38bdf8}
+button{background:#2563eb;color:white}
+#cash{background:#f59e0b;color:black;display:none}
+.menu{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:12px;border-radius:20px}
+.menu div{opacity:.9}
+.popup{
  position:fixed;top:20px;left:50%;
  transform:translateX(-50%);
  background:#020617;
@@ -173,9 +173,9 @@ button{{background:#2563eb;color:white}}
  border-radius:18px;
  display:none;
  animation:pop .4s ease;
-}}
-@keyframes pop{{from{{transform:translateX(-50%) scale(.8);opacity:0}}to{{transform:translateX(-50%) scale(1);opacity:1}}}}
-#admin{{display:none}}
+}
+@keyframes pop{from{transform:translateX(-50%) scale(.8);opacity:0}to{transform:translateX(-50%) scale(1);opacity:1}}
+#admin{display:none}
 </style>
 </head>
 
@@ -211,7 +211,7 @@ button{{background:#2563eb;color:white}}
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-if(uid == "{ADMIN_ID}") admin.style.display="block";
+if(uid == "__ADMIN__") document.getElementById("admin").style.display="block";
 let cashed=false, lastState="";
 
 function showPopup(t){
@@ -256,19 +256,20 @@ async function tick(){
 
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid,amount:+amt.value}})});
+bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,amount:+amt.value})});
 cash.onclick=async ()=>{
  cashed=true;
- let r=await fetch("/cashout",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid}})}).then(r=>r.json());
+ let r=await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})}).then(r=>r.json());
  showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
 }
 
 function openAdmin(){
  let u=prompt("TG ID");
  let a=prompt("Сумма");
- fetch("/admin/add",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{admin:uid,uid:u,amount:a}})});
+ fetch("/admin/add",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({admin:uid,uid:u,amount:a})});
 }
 </script>
 </body>
 </html>
 """
+    return HTMLResponse(html.replace("__ADMIN__", ADMIN_ID))
