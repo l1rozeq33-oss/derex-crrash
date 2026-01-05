@@ -10,7 +10,7 @@ app = FastAPI()
 
 BAL_FILE = "balances.json"
 HIST_FILE = "history.json"
-CRASH_FILE = "crash_history.json"
+ROUND_FILE = "rounds.json"
 
 def load(path, default):
     try:
@@ -25,7 +25,7 @@ def save(path, data):
 
 balances = load(BAL_FILE, {})
 history = load(HIST_FILE, {})
-crash_history = load(CRASH_FILE, [])
+round_history = load(ROUND_FILE, [])
 
 state = {
     "state": "waiting",
@@ -37,7 +37,7 @@ state = {
 
 # ================= GAME LOOP =================
 async def game_loop():
-    global crash_history
+    global round_history
     while True:
         state["state"] = "waiting"
         state["timer"] = 5
@@ -61,9 +61,9 @@ async def game_loop():
 
         state["state"] = "crashed"
 
-        crash_history.insert(0, state["x"])
-        crash_history = crash_history[:10]
-        save(CRASH_FILE, crash_history)
+        round_history.insert(0, state["x"])
+        round_history = round_history[:10]
+        save(ROUND_FILE, round_history)
 
         for uid, bet in list(state["bets"].items()):
             history.setdefault(uid, []).append({
@@ -82,10 +82,7 @@ async def startup():
 # ================= API =================
 @app.get("/state")
 def get_state():
-    return {
-        **state,
-        "crash_history": crash_history
-    }
+    return {**state, "rounds": round_history}
 
 @app.get("/balance/{uid}")
 def get_balance(uid: str):
@@ -100,8 +97,10 @@ async def bet(data: dict):
 
     if state["state"] != "waiting":
         return {"error": "round started"}
+
     if uid in state["bets"]:
         return {"error": "already bet"}
+
     if balances.get(uid, 0) < amt:
         return {"error": "no money"}
 
@@ -113,6 +112,7 @@ async def bet(data: dict):
 @app.post("/cashout")
 async def cashout(data: dict):
     uid = str(data["uid"])
+
     if uid not in state["bets"]:
         return {"error": "no bet"}
 
@@ -135,13 +135,14 @@ async def cashout(data: dict):
 async def admin_add(data: dict):
     if str(data["admin"]) != ADMIN_ID:
         return {"error": "forbidden"}
+
     uid = str(data["uid"])
     amt = float(data["amount"])
     balances[uid] = balances.get(uid, 0) + amt
     save(BAL_FILE, balances)
     return {"ok": True}
 
-# ================= FRONT =================
+# ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = """
@@ -151,83 +152,16 @@ def index():
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <title>DerexCasino</title>
-
 <style>
-body{
- margin:0;
- background:radial-gradient(circle at top,#1e293b,#020617);
- color:#fff;
- font-family:Arial;
- overflow:hidden;
-}
-#app{
- padding:16px;
- padding-bottom:140px;
- height:100vh;
- display:flex;
- flex-direction:column;
- justify-content:space-between;
-}
-.badge{
- background:rgba(2,6,23,.8);
- padding:8px 16px;
- border-radius:20px;
-}
+body{margin:0;background:#020617;color:#fff;font-family:Arial}
+#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
+.badge{background:#020617;padding:8px 16px;border-radius:20px}
 .center{text-align:center}
-.rocket{
- font-size:110px;
- transition:transform .9s cubic-bezier(.4,1.6,.6,1),opacity .9s;
-}
-.flyaway{
- transform:translate(240px,-260px) rotate(45deg);
- opacity:0;
-}
-.history{
- display:flex;
- justify-content:center;
- gap:8px;
- margin-top:8px;
- flex-wrap:wrap;
-}
-.hx{
- background:#020617;
- padding:6px 10px;
- border-radius:12px;
- font-size:14px;
-}
-input,button{
- width:100%;
- padding:18px;
- border-radius:16px;
- border:none;
- font-size:20px;
- margin-top:10px;
-}
-input{background:#0f172a;color:#38bdf8}
-button{background:#2563eb;color:white}
-#cash{background:#f59e0b;color:black;display:none}
-
-.menu{
- position:fixed;
- bottom:16px;
- left:16px;
- right:16px;
- display:flex;
- justify-content:space-around;
- background:rgba(2,6,23,.95);
- padding:18px;
- border-radius:24px;
- z-index:10;
-}
-.menu div{
- padding:10px 14px;
- border-radius:14px;
- background:#020617;
-}
-#admin{display:none}
+.rocket{font-size:110px}
+.history{margin-top:10px;font-size:14px;opacity:.8}
+.history span{margin-right:6px}
 </style>
 </head>
-
 <body>
 <div id="app">
  <div style="display:flex;justify-content:space-between">
@@ -237,7 +171,7 @@ button{background:#2563eb;color:white}
 
  <div class="center">
   <div id="timer"></div>
-  <div class="rocket" id="rocket">🚀</div>
+  <div class="rocket">🚀</div>
   <div id="x">1.00x</div>
   <div class="history" id="hist"></div>
  </div>
@@ -245,27 +179,17 @@ button{background:#2563eb;color:white}
  <div>
   <input id="amt" type="number" value="10">
   <button id="bet">Сделать ставку</button>
-  <button id="cash"></button>
+  <button id="cash" style="display:none"></button>
  </div>
-</div>
-
-<div class="menu">
- <div>➕ Пополнить</div>
- <div>🚀 Краш</div>
- <div>💸 Вывести</div>
- <div id="admin">👑 Админ</div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-if(uid=="__ADMIN__") admin.style.display="block";
-
-let lastState="", cashed=false;
 
 async function tick(){
- const s = await fetch("/state").then(r=>r.json());
- const b = await fetch("/balance/"+uid).then(r=>r.json());
+ let s=await fetch("/state").then(r=>r.json());
+ let b=await fetch("/balance/"+uid).then(r=>r.json());
 
  on.innerText=s.online;
  bal.innerText=b.balance.toFixed(2);
@@ -273,58 +197,18 @@ async function tick(){
  timer.innerText=s.state=="waiting"?"Старт через "+s.timer:"";
 
  hist.innerHTML="";
- s.crash_history.forEach(v=>{
-  let d=document.createElement("div");
-  d.className="hx";
-  d.innerText=v+"x";
-  hist.appendChild(d);
+ s.rounds.forEach(v=>{
+  let sp=document.createElement("span");
+  sp.innerText=v.toFixed(2)+"x";
+  hist.appendChild(sp);
  });
-
- if(s.state=="flying"){
-  rocket.classList.remove("flyaway");
-  bet.style.display="none";
-  if(s.bets[uid] && !cashed){
-   cash.style.display="block";
-   cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
-  }
- }
-
- if(s.state=="crashed" && lastState!="crashed"){
-  rocket.classList.add("flyaway");
-  cash.style.display="none";
-  cashed=true;
- }
-
- if(s.state=="waiting"){
-  rocket.classList.remove("flyaway");
-  bet.style.display="block";
-  cash.style.display="none";
-  cashed=false;
- }
-
- lastState=s.state;
 }
-
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{
- method:"POST",
- headers:{'Content-Type':'application/json'},
- body:JSON.stringify({uid,amount:+amt.value})
-});
-
-cash.onclick=async ()=>{
- cashed=true;
- cash.style.display="none";
- const r=await fetch("/cashout",{
-  method:"POST",
-  headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({uid})
- }).then(r=>r.json());
- alert("Вы выиграли "+r.win+"$");
-}
+bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,amount:+amt.value})});
+cash.onclick=()=>fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})});
 </script>
 </body>
 </html>
 """
-    return HTMLResponse(html.replace("__ADMIN__", ADMIN_ID))
+    return HTMLResponse(html)
