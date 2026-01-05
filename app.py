@@ -1,18 +1,23 @@
+import os
 import json
 import random
 import asyncio
-import os
-
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from fastapi.responses import HTMLResponse, JSONResponse
 
-app = FastAPI()
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
 # ================== ENV ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 WEBAPP_URL = os.getenv("WEBAPP_URL")
+
+# ================== FASTAPI ==================
+app = FastAPI()
 
 # ================== FILES ==================
 BAL_FILE = "balances.json"
@@ -54,7 +59,6 @@ async def game_loop():
             await asyncio.sleep(1)
 
         state["state"] = "flying"
-
         crash_at = random.choice(
             [round(random.uniform(1.0, 1.3), 2)] * 4 +
             [round(random.uniform(1.5, 4.5), 2)]
@@ -76,9 +80,37 @@ async def game_loop():
         save(HIST_FILE, history)
         await asyncio.sleep(1)
 
+# ================== TELEGRAM BOT ==================
+tg_app = Application.builder().token(BOT_TOKEN).build()
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🚀 Derex Crash\n\nОткрыть игру:",
+        reply_markup={
+            "inline_keyboard": [[
+                {"text": "🎮 Играть", "web_app": {"url": WEBAPP_URL}}
+            ]]
+        }
+    )
+
+tg_app.add_handler(CommandHandler("start", start_cmd))
+
+# ================== WEBHOOK ==================
+@app.post("/webhook")
+async def telegram_webhook(req: Request):
+    data = await req.json()
+    update = Update.de_json(data, tg_app.bot)
+    await tg_app.process_update(update)
+    return {"ok": True}
+
+# ================== STARTUP ==================
 @app.on_event("startup")
 async def startup():
     asyncio.create_task(game_loop())
+
+    # 🔥 ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ
+    await tg_app.initialize()
+    await tg_app.bot.set_webhook(f"{WEBAPP_URL}/webhook")
 
 # ================== API ==================
 @app.get("/state")
@@ -134,31 +166,6 @@ async def cashout(data: dict):
 def get_history(uid: str):
     return history.get(uid, [])
 
-# ================== TELEGRAM BOT ==================
-tg_app = Application.builder().token(BOT_TOKEN).build()
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🎰 DerexCasino\n\nНажми кнопку ниже 👇",
-        reply_markup={
-            "inline_keyboard": [[
-                {
-                    "text": "🚀 Открыть Crash",
-                    "web_app": {"url": WEBAPP_URL}
-                }
-            ]]
-        }
-    )
-
-tg_app.add_handler(CommandHandler("start", start_cmd))
-
-@app.post("/webhook")
-async def telegram_webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, tg_app.bot)
-    await tg_app.process_update(update)
-    return {"ok": True}
-
 # ================== MINI APP ==================
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -212,7 +219,7 @@ button{background:#2563eb;color:white}
  </div>
 
  <div class="menu">
-  <div onclick="alert('История скоро')">🏆 Топ</div>
+  <div>🏆 Топ</div>
   <div>🚀 Краш</div>
   <div onclick="alert('ID: '+uid)">👤 Профиль</div>
  </div>
