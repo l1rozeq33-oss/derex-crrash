@@ -70,7 +70,7 @@ def s(): return state
 @app.get("/balance/{u}")
 def bal(u:str):
     if u not in balances:
-        balances[u]=100.0
+        balances[u] = 0.0   # <<< ИЗНАЧАЛЬНО 0$
         save(BAL_FILE,balances)
     return {"balance":balances[u]}
 
