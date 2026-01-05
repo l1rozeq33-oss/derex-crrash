@@ -6,6 +6,8 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
+ADMIN_ID = "123456789"  # <<< ВСТАВЬ СЮДА СВОЙ TG ID
+
 BAL_FILE = "balances.json"
 HIST_FILE = "history.json"
 
@@ -34,11 +36,13 @@ state = {
 # ================= GAME LOOP =================
 async def game_loop():
     while True:
-        state["state"] = "waiting"
-        state["timer"] = 5
-        state["bets"] = {}
-        state["x"] = 1.00
-        state["online"] = random.randint(10, 40)
+        state.update({
+            "state": "waiting",
+            "timer": 5,
+            "bets": {},
+            "x": 1.00,
+            "online": random.randint(10, 40)
+        })
 
         for i in range(5, 0, -1):
             state["timer"] = i
@@ -68,7 +72,7 @@ async def game_loop():
 
 @app.on_event("startup")
 async def startup():
-    asyncio.get_event_loop().create_task(game_loop())
+    asyncio.create_task(game_loop())
 
 # ================= API =================
 @app.get("/state")
@@ -123,56 +127,56 @@ async def cashout(data: dict):
 
     return {"win": win, "x": state["x"]}
 
+@app.post("/admin/add")
+async def admin_add(data: dict):
+    if str(data["admin"]) != ADMIN_ID:
+        return {"error": "no access"}
+    uid = str(data["uid"])
+    amt = float(data["amount"])
+    balances[uid] = balances.get(uid, 0) + amt
+    save(BAL_FILE, balances)
+    return {"ok": True}
+
 # ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return """
+    return f"""
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
-<title>DerexCasino</title>
 
 <style>
-body{
- margin:0;
- background:radial-gradient(circle at top,#020617,#000);
- color:#fff;
+body {{
+ background:#020617;
+ color:white;
  font-family:Arial;
+ margin:0;
  overflow:hidden;
-}
-#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
-.badge{background:#111827;padding:8px 16px;border-radius:20px}
-.center{text-align:center}
-.rocket{
+}}
+.rocket {{
  font-size:110px;
- transition:transform .6s ease, opacity .6s ease;
-}
-.rocket.fly-away{
- transform:translate(300px,-300px) rotate(45deg);
+ transition:transform 0.8s ease, opacity 0.8s ease;
+}}
+.fly {{
+ transform:translate(280px,-320px) rotate(45deg);
  opacity:0;
-}
-input,button{
- width:100%;
- padding:18px;
- border-radius:16px;
- border:none;
- font-size:20px;
- margin-top:10px
-}
-input{background:#0f172a;color:#38bdf8}
-button{background:#2563eb;color:white}
-#cash{background:#f59e0b;color:black;display:none}
-.menu{
+}}
+.menu {{
  display:flex;
  justify-content:space-around;
- background:#020617;
- padding:18px;
- margin-bottom:20px;
-}
-.menu div{opacity:.9;font-size:18px}
-.popup{
+ padding:20px;
+}}
+button,input {{
+ width:100%;
+ padding:16px;
+ border-radius:14px;
+ margin-top:8px;
+ border:none;
+ font-size:18px;
+}}
+#popup {{
  position:fixed;
  top:20px;
  left:50%;
@@ -182,101 +186,77 @@ button{background:#2563eb;color:white}
  padding:14px 22px;
  border-radius:16px;
  display:none;
- animation:fadeUp .4s ease;
-}
-@keyframes fadeUp{
- from{opacity:0;transform:translate(-50%,20px)}
- to{opacity:1;transform:translate(-50%,0)}
-}
+}}
 </style>
 </head>
 
 <body>
-<div class="popup" id="popup"></div>
+<div id="popup"></div>
 
 <div id="app">
- <div style="display:flex;justify-content:space-between">
-  <div class="badge">👥 <span id="on"></span></div>
-  <div class="badge">💰 <span id="bal"></span>$</div>
- </div>
+<div id="rocket" class="rocket">🚀</div>
+<div id="x">1.00x</div>
 
- <div class="center">
-  <div id="timer"></div>
-  <div class="rocket" id="rocket">🚀</div>
-  <div id="x">1.00x</div>
- </div>
+<input id="amt" type="number" value="10">
+<button id="bet">Сделать ставку</button>
+<button id="cash" style="display:none;background:#f59e0b">Вывести</button>
 
- <div>
-  <input id="amt" type="number" value="10">
-  <button id="bet">Сделать ставку</button>
-  <button id="cash"></button>
- </div>
-
- <div class="menu">
-  <div onclick="alert('Пополнение временно недоступно. Пишите @DerexSupport')">➕ Пополнить</div>
-  <div>🚀 Краш</div>
-  <div onclick="alert('Вывод временно недоступен. Пишите @DerexSupport')">💸 Вывести</div>
- </div>
+<div class="menu">
+ <div onclick="openAdmin()">⚙ Админка</div>
+</div>
 </div>
 
 <script>
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-let cashed=false;
-let crashedAnim=false;
+const ADMIN_ID = "{ADMIN_ID}";
+let crashed=false;
 
-function showPopup(text){
- popup.innerText=text;
- popup.style.display="block";
- setTimeout(()=>popup.style.display="none",2500);
-}
+function popup(t) {{
+ let p=document.getElementById("popup");
+ p.innerText=t;
+ p.style.display="block";
+ setTimeout(()=>p.style.display="none",2500);
+}}
 
-async function tick(){
+async function tick(){{
  let s=await fetch("/state").then(r=>r.json());
- let b=await fetch("/balance/"+uid).then(r=>r.json());
+ let r=document.getElementById("rocket");
 
- on.innerText=s.online;
- bal.innerText=b.balance.toFixed(2);
- x.innerText=s.x.toFixed(2)+"x";
- timer.innerText=s.state=="waiting"?"Старт через "+s.timer:"";
+ document.getElementById("x").innerText=s.x.toFixed(2)+"x";
 
- if(s.state=="flying"){
-  rocket.classList.remove("fly-away");
-  rocket.style.transform="translateY(-"+(s.x*5)+"px)";
-  bet.style.display="none";
-  if(s.bets && s.bets[uid] && !cashed){
-   cash.style.display="block";
-   cash.innerText="Вывести "+(s.bets[uid]*s.x).toFixed(2)+"$";
-  }
- }
+ if(s.state==="flying"){{
+  crashed=false;
+  r.classList.remove("fly");
+  r.style.transform="translateY(-"+(s.x*6)+"px)";
+ }}
 
- if(s.state=="waiting"){
-  rocket.style.transform="translateY(0)";
-  rocket.classList.remove("fly-away");
-  rocket.style.opacity=1;
-  bet.style.display="block";
-  cash.style.display="none";
-  cashed=false;
-  crashedAnim=false;
- }
+ if(s.state==="crashed" && !crashed){{
+  crashed=true;
+  r.classList.add("fly");
+ }}
 
- if(s.state=="crashed" && !crashedAnim){
-  crashedAnim=true;
-  rocket.classList.add("fly-away");
-  cash.style.display="none";
-  cashed=true;
- }
-}
+ if(s.state==="waiting"){{
+  r.classList.remove("fly");
+  r.style.transform="translateY(0)";
+ }}
+}}
 
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid,amount:+amt.value})});
-cash.onclick=async ()=>{
- cashed=true;
- cash.style.display="none";
- let r=await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid})}).then(r=>r.json());
- showPopup("Вы выиграли "+r.win+"$ | x"+r.x);
-}
+bet.onclick=()=>fetch("/bet",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{uid,amount:+amt.value}})}});
+
+cash.onclick=async()=>{{
+ let r=await fetch("/cashout",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{uid}})}}).then(r=>r.json());
+ popup("+"+r.win+"$");
+}}
+
+function openAdmin(){{
+ if(uid!=ADMIN_ID) return;
+ let u=prompt("ID");
+ let a=prompt("Сумма");
+ fetch("/admin/add",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{admin:uid,uid:u,amount:a}})}})
+}}
 </script>
 </body>
 </html>
