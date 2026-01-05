@@ -25,20 +25,19 @@ state = {
 # ================= GAME LOOP =================
 async def game_loop():
     while True:
-        state.update({
-            "state": "waiting",
-            "timer": 5,
-            "x": 1.00,
-            "bets": {},
-            "history_x": [],
-            "online": random.randint(10, 40)
-        })
+        state["state"] = "waiting"
+        state["timer"] = 5
+        state["x"] = 1.00
+        state["bets"] = {}
+        state["history_x"] = []
+        state["online"] = random.randint(10, 40)
 
         for i in range(5, 0, -1):
             state["timer"] = i
             await asyncio.sleep(1)
 
         state["state"] = "flying"
+
         crash_at = random.choice(
             [round(random.uniform(1.0, 1.3), 2)] * 4 +
             [round(random.uniform(1.5, 5.0), 2)]
@@ -122,7 +121,7 @@ async def admin_add(data: dict):
 # ================= MINI APP =================
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTMLResponse(f"""
+    return HTMLResponse("""
 <!DOCTYPE html>
 <html>
 <head>
@@ -131,27 +130,27 @@ def index():
 <title>Derex Crash</title>
 
 <style>
-body {{
+body{
  margin:0;
  background:radial-gradient(circle at top,#020617,#000);
  color:#fff;
  font-family:Arial;
  overflow:hidden;
-}}
-#app{{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}}
-.badge{{background:#020617;padding:8px 16px;border-radius:20px}}
-.center{{text-align:center}}
-.rocket{{font-size:120px;transition:transform .8s ease}}
-.fly{{transform:translateY(-200px)}}
-.flyaway{{transform:translate(260px,-260px) rotate(45deg);opacity:0}}
-input,button{{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}}
-input{{background:#020617;color:#38bdf8}}
-button{{background:#2563eb;color:white}}
-#cash{{background:#f59e0b;color:black;display:none}}
-.menu{{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:20px;border-radius:20px}}
-.popup{{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#020617;padding:14px 22px;border-radius:18px;display:none}}
-#history{{font-size:12px;opacity:.6;margin-top:6px}}
-#admin{{display:none}}
+}
+#app{padding:16px;height:100vh;display:flex;flex-direction:column;justify-content:space-between}
+.badge{background:#020617;padding:8px 16px;border-radius:20px}
+.center{text-align:center}
+.rocket{font-size:120px;transition:transform .8s ease}
+.fly{transform:translateY(-200px)}
+.flyaway{transform:translate(260px,-260px) rotate(45deg);opacity:0}
+input,button{width:100%;padding:18px;border-radius:16px;border:none;font-size:20px;margin-top:10px}
+input{background:#020617;color:#38bdf8}
+button{background:#2563eb;color:white}
+#cash{background:#f59e0b;color:black;display:none}
+.menu{display:flex;justify-content:space-around;background:#020617;padding:16px;margin-bottom:20px;border-radius:20px}
+.popup{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#020617;padding:14px 22px;border-radius:18px;display:none}
+#history{font-size:12px;opacity:.6;margin-top:6px}
+#admin{display:none}
 </style>
 </head>
 
@@ -186,9 +185,10 @@ button{{background:#2563eb;color:white}}
 </div>
 
 <script>
+const ADMIN_ID = "7963516753";
 const tg = Telegram.WebApp; tg.expand();
 const uid = tg.initDataUnsafe.user.id;
-if(uid == "{ADMIN_ID}") admin.style.display="block";
+if(uid == ADMIN_ID) admin.style.display="block";
 
 let cashed=false, last="";
 
@@ -235,18 +235,18 @@ async function tick(){
 
 setInterval(tick,120);
 
-bet.onclick=()=>fetch("/bet",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid,amount:+amt.value}})});
+bet.onclick=()=>fetch("/bet",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid,amount:+amt.value})});
 cash.onclick=async ()=>{
  cashed=true;
  cash.style.display="none";
- let r=await fetch("/cashout",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{uid}})}).then(r=>r.json());
+ let r=await fetch("/cashout",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({uid:uid})}).then(r=>r.json());
  popupMsg("+"+r.win+"$ | x"+r.x);
 }
 
 function admin(){
  let u=prompt("UID");
  let a=prompt("Сумма");
- fetch("/admin/add",{method:"POST",headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{admin:uid,uid:u,amount:a}})});
+ fetch("/admin/add",{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({admin:uid,uid:u,amount:a})});
 }
 </script>
 </body>
